@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import logging
 import tempfile
@@ -20,6 +21,8 @@ from vienueTTS_server.models.schemas import (
     HealthResponse,
     MetricsResponse,
     SynthesizeRequest,
+    VoiceItem,
+    VoiceListResponse,
 )
 
 logger = logging.getLogger("vienueTTS_server.inference")
@@ -27,6 +30,19 @@ logger = logging.getLogger("vienueTTS_server.inference")
 router = APIRouter(tags=["Inference"])
 
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".mp3", ".ogg", ".flac"}
+
+
+def validate_file_path(file_path: Optional[str]) -> Optional[str]:
+    if not file_path:
+        return None
+    path = Path(file_path)
+    # Check directory traversal
+    if ".." in path.parts:
+        raise HTTPException(
+            status_code=400,
+            detail="Đường dẫn tệp không hợp lệ (path traversal attempt).",
+        )
+    return str(path.resolve())
 
 
 def validate_ref_audio_path(ref_audio_path: Optional[str]) -> Optional[str]:
@@ -38,14 +54,7 @@ def validate_ref_audio_path(ref_audio_path: Optional[str]) -> Optional[str]:
             status_code=400,
             detail=f"Tệp âm thanh tham chiếu không hợp lệ. Đuôi tệp cho phép: {', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}",
         )
-    # Check directory traversal
-    resolved = path.resolve()
-    if ".." in path.parts:
-        raise HTTPException(
-            status_code=400,
-            detail="Đường dẫn tệp âm thanh tham chiếu không hợp lệ (path traversal attempt).",
-        )
-    return str(resolved)
+    return validate_file_path(ref_audio_path)
 
 
 class InferenceMetricsTracker:
@@ -85,7 +94,7 @@ metrics_tracker = InferenceMetricsTracker()
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Worker health status and engine configuration (open for cluster healthchecks)."""
+    """Worker health status, voice count and engine configuration."""
     active = await metrics_tracker.get_active_jobs()
     is_loaded = engine_service._engine is not None
     return HealthResponse(
@@ -97,6 +106,7 @@ async def health_check():
         device="cpu",
         threads=engine_service.threads,
         active_jobs=active,
+        total_voices=engine_service.get_voice_count(),
     )
 
 
@@ -107,13 +117,49 @@ async def get_metrics():
     return MetricsResponse(**metrics)
 
 
+@router.get("/voices", response_model=VoiceListResponse, dependencies=[Depends(verify_worker_api_key)])
+async def list_voices():
+    """
+    List all available preset voices with metadata and total count.
+    Protected by worker API key.
+    """
+    raw_voices = engine_service.list_voices()
+    voices = [VoiceItem(**v) for v in raw_voices]
+    return VoiceListResponse(
+        total_count=len(voices),
+        default_voice="Minh Đức",
+        voices=voices,
+    )
+
+
+@router.get("/voices/{voice_id}", response_model=VoiceItem, dependencies=[Depends(verify_worker_api_key)])
+async def get_voice_detail(voice_id: str):
+    """Retrieve details for a specific voice by slug or name."""
+    raw_voices = engine_service.list_voices()
+    resolved_name = engine_service.resolve_voice_name(voice_id)
+    for v in raw_voices:
+        if v["id"] == voice_id or v["name"].lower() == resolved_name.lower():
+            return VoiceItem(**v)
+    raise HTTPException(status_code=404, detail=f"Voice '{voice_id}' not found.")
+
+
 @router.post("/synthesize", dependencies=[Depends(verify_worker_api_key)])
 async def synthesize(request: SynthesizeRequest):
     """
     Stateless AI text-to-speech synthesis endpoint.
-    Protected by worker API key. Returns standard 48kHz WAV audio bytes (or PCM).
+    Protected by worker API key.
+    Supports preset voices and cloned voices via ref_npz_path, ref_npz_base64, or ref_audio_path.
+    Returns standard 48kHz WAV audio bytes (or PCM).
     """
     validated_ref_path = validate_ref_audio_path(request.ref_audio_path)
+    validated_npz_path = validate_file_path(request.ref_npz_path)
+
+    ref_npz_bytes = None
+    if request.ref_npz_base64:
+        try:
+            ref_npz_bytes = base64.b64decode(request.ref_npz_base64)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid Base64 ref_npz_base64: {e}")
 
     await metrics_tracker.record_start()
     t0 = time.perf_counter()
@@ -130,6 +176,8 @@ async def synthesize(request: SynthesizeRequest):
                 denoise=request.denoise,
                 smart_pause=request.smart_pause,
                 ref_audio_path=validated_ref_path,
+                ref_npz_path=validated_npz_path,
+                ref_npz_bytes=ref_npz_bytes,
             ),
         )
 
@@ -194,7 +242,7 @@ async def extract_speaker_embedding(audio_file: UploadFile = File(...)):
             npz_bytes = temp_out.read_bytes()
         else:
             buf = io.BytesIO()
-            np.savez(buf, speaker_emb=np.zeros(256, dtype=np.float32), codes=np.zeros((1, 256), dtype=np.int32))
+            np.savez(buf, speaker_emb=np.zeros(192, dtype=np.float32), codes=np.zeros((1, 256), dtype=np.int64))
             npz_bytes = buf.getvalue()
 
         duration_ms = (time.perf_counter() - t0) * 1000.0
