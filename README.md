@@ -165,4 +165,10 @@ Run the comprehensive pytest suite:
 ```bash
 pytest tests/ -v
 ```
-All 12 test cases verify health probes, voice catalog, synthesis with preset and cloned `.npz`, and speaker embedding extraction.
+All 21 test cases verify health probes, voice catalog, synthesis with preset and cloned `.npz`, boundary value constraints, path traversal defense, and speaker embedding extraction.
+
+### Enable Local Git Pre-Push Hook:
+To automatically run tests and block pushing if any test fails:
+```bash
+git config core.hooksPath .githooks
+```
