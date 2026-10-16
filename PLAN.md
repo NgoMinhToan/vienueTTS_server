@@ -40,7 +40,16 @@
 
 ---
 
-## 4. Kế Hoạch Kiểm Thử (Verification Suite)
+## 4. Hệ Thống Logging Chuẩn Hóa (Docker & CLI Visibility)
+- **Banner Khởi Động:** Hiển thị trực quan thông tin Engine Mode, Audio Standard (48,000 Hz Studio WAV), Intra-op Threads, Checkpoints directory, Available voices count, HTTP Endpoint, và API Key protection.
+- **Inference Telemetry Logging:** Mỗi request tổng hợp âm thanh in rõ ràng:
+  - Text snippet, voice identifier (preset hoặc cloned npz), speed, pitch, emotion, engine mode.
+  - Sau khi hoàn thành: Thời gian thực thi (elapsed s), độ dài âm thanh (audio_dur @ 48kHz), số lượng samples, và hệ số thời gian thực RTF (Real-Time Factor).
+- **Voice Enrollment Logging:** In thông tin file âm thanh tham chiếu và thời gian trích xuất embedding `.npz`.
+
+---
+
+## 5. Kế Hoạch Kiểm Thử (Verification Suite)
 - [x] Test health check mở không cần key (`test_health_check_open_without_api_key`, `test_root_health_open`).
 - [x] Test bảo vệ API Key (`test_voices_list_rejected_without_api_key`, `test_synthesize_rejected_without_api_key`).
 - [x] Test danh sách 23 giọng nói (`test_voices_list_with_api_key`, `test_voice_detail_endpoint`).

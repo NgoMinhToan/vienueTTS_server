@@ -53,9 +53,23 @@ class PrivateNetworkAccessMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     port = int(os.getenv("PORT", "8001"))
     has_key = bool(os.getenv("API_KEY", "").strip())
+    voice_count = engine_service.get_voice_count()
+
+    print("\n" + "=" * 68)
+    print(" [VIENEU TTS WORKER] STATELESS 48kHz AI INFERENCE SERVICE")
+    print(f" * Engine Mode:          {engine_service.engine_mode}")
+    print(f" * Precision:            {engine_service.precision}")
+    print(f" * Audio Standard:       48,000 Hz (48kHz WAV Studio Standard)")
+    print(f" * Intra-op Threads:     {engine_service.threads}")
+    print(f" * Available Voices:     {voice_count} preset voices")
+    print(f" * Worker HTTP Endpoint: http://0.0.0.0:{port}")
+    print(f" * API Key Protected:    {has_key}")
+    print("=" * 68 + "\n")
+
     logger.info(f"Starting vienueTTS_server on port {port} (API_KEY protected: {has_key})...")
-    logger.info(f"Engine mode: {engine_service.engine_mode}, Threads: {engine_service.threads}, Voices: {engine_service.get_voice_count()}")
+    logger.info(f"Engine mode: {engine_service.engine_mode}, Threads: {engine_service.threads}, Voices: {voice_count}")
     yield
+    print("\n[vienueTTS_server shutting down...]\n")
     logger.info("Shutting down vienueTTS_server.")
 
 

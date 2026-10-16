@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -222,6 +223,7 @@ class ModelEngineService:
         ref_npz_path: Optional[str] = None,
         ref_npz_bytes: Optional[bytes] = None,
     ) -> Tuple[np.ndarray, int]:
+        t0 = time.perf_counter()
         engine = self._load_engine()
         if engine is not None:
             # 1. Check if cloned voice .npz is provided
@@ -245,6 +247,11 @@ class ModelEngineService:
                     logger.warning(f"Failed to load speaker embedding from {ref_npz_path}: {e}")
 
             target_voice = custom_voice if custom_voice is not None else self.resolve_voice_name(voice_id)
+            voice_display = "[Custom Cloned Voice .npz]" if custom_voice is not None else str(target_voice)
+            logger.info(
+                f"🎙️ [48kHz INFERENCE] Starting synthesis: text='{text[:60]}...' ({len(text)} chars) | "
+                f"Voice='{voice_display}' | Speed={speed}x | Pitch={pitch}st | Emotion={emotion_level}% | Mode={self.engine_mode}"
+            )
 
             # Native Vieneu inference call
             audio = engine.infer(
@@ -257,28 +264,45 @@ class ModelEngineService:
             )
             if isinstance(audio, tuple):
                 audio = audio[0]
-            return audio.astype(np.float32), SAMPLE_RATE
+            audio_arr = audio.astype(np.float32)
+            elapsed = time.perf_counter() - t0
+            audio_dur = len(audio_arr) / SAMPLE_RATE if len(audio_arr) else 0.0
+            rtf = elapsed / audio_dur if audio_dur > 0 else 0.0
+            logger.info(
+                f"✅ [48kHz INFERENCE] Synthesized {audio_dur:.2f}s audio @ {SAMPLE_RATE}Hz in {elapsed:.2f}s "
+                f"(RTF={rtf:.2f}, {len(audio_arr):,} samples)"
+            )
+            return audio_arr, SAMPLE_RATE
 
         # Fallback sine wave tone for unit test/dev mode without model checkpoint
         duration = min(3.0, max(0.5, len(text) * 0.05 / max(0.5, speed)))
         t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False, dtype=np.float32)
         base_freq = 220.0 * (2.0 ** (pitch / 12.0))
         audio = 0.25 * np.sin(2.0 * np.pi * base_freq * t)
+        elapsed = time.perf_counter() - t0
+        logger.info(f"⚠️ [MOCK SYNTHESIS] Generated {duration:.2f}s fallback audio @ {SAMPLE_RATE}Hz in {elapsed:.2f}s")
         return audio, SAMPLE_RATE
 
     def precompute_voice_embeddings(self, audio_path: str, output_npz_path: Path) -> bool:
+        t0 = time.perf_counter()
+        logger.info(f"🧬 [VOICE ENROLLMENT] Extracting speaker embedding from reference audio: {audio_path}")
         engine = self._load_engine()
         if engine is not None and hasattr(engine, "encode_reference"):
             try:
                 emb, codes = engine.encode_reference(audio_path)
                 if emb is not None and len(emb) > 0:
                     np.savez(output_npz_path, speaker_emb=emb, codes=codes)
+                    elapsed = time.perf_counter() - t0
+                    logger.info(f"✅ [VOICE ENROLLMENT] Embedding extracted & saved to {output_npz_path.name} in {elapsed:.2f}s")
                     return True
             except Exception as e:
                 logger.warning(f"Native reference encoding warning: {e}. Generating fallback embedding.")
         elif engine is not None and hasattr(engine, "extract_features"):
             try:
-                return engine.extract_features(audio_path, str(output_npz_path))
+                res = engine.extract_features(audio_path, str(output_npz_path))
+                elapsed = time.perf_counter() - t0
+                logger.info(f"✅ [VOICE ENROLLMENT] Features extracted to {output_npz_path.name} in {elapsed:.2f}s")
+                return res
             except Exception as e:
                 logger.warning(f"Extract features warning: {e}")
 
@@ -286,6 +310,8 @@ class ModelEngineService:
         speaker_emb = np.zeros(192, dtype=np.float32)
         codes = np.zeros((1, 256), dtype=np.int64)
         np.savez(output_npz_path, speaker_emb=speaker_emb, codes=codes)
+        elapsed = time.perf_counter() - t0
+        logger.info(f"⚠️ [VOICE ENROLLMENT] Saved fallback speaker embedding to {output_npz_path.name} in {elapsed:.2f}s")
         return True
 
 
