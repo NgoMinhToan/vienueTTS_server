@@ -1,73 +1,71 @@
 # vienueTTS_server
 
-Stateless AI text-to-speech inference and voice embedding microservice powered by **VieNeu-TTS v3 Turbo/Nano** (Vietnamese and English, 48kHz WAV audio standard).
+Stateless AI text-to-speech inference and voice embedding microservice powered by **VieNeu-TTS v3 Turbo/Nano** (Vietnamese and English, standard 48kHz WAV audio output).
 
 ---
 
 ## 1. Overview & Architecture
 
 `vienueTTS_server` is designed as a lightweight, stateless microservice dedicated solely to AI inference tasks:
-- **TTS Synthesis (`POST /internal/v1/synthesize`)**: Synthesizes speech from text at 48kHz sampling rate with configurable speed, pitch, and emotion levels.
-- **Voice Embedding Extraction (`POST /internal/v1/embed`)**: Extracts speaker embedding features (`.npz`) from reference audio files for instant voice cloning.
-- **Health & Metrics Probes (`GET /internal/v1/health`, `GET /internal/v1/metrics`)**: Exposes engine readiness, active jobs, and inference latency telemetry.
+- **TTS Synthesis (`POST /internal/v1/synthesize`)**: Synthesizes speech from text at 48kHz sampling rate. Supports 23 built-in preset voices and instant cloned voices (via `.npz` speaker embedding or audio reference).
+- **Preset Voices Catalog (`GET /internal/v1/voices`)**: Exposes list of 23 built-in voices with descriptions, regional accents (Bắc, Trung, Nam), genders, and metadata.
+- **Voice Embedding Extraction (`POST /internal/v1/embed`)**: Extracts speaker embedding features (`.npz` with 192-d embedding and reference codes) from reference audio files for voice cloning.
+- **Health & Metrics Probes (`GET /internal/v1/health`, `GET /internal/v1/metrics`)**: Exposes engine readiness, total voices, active jobs, and inference latency telemetry.
 - **Security**: Authenticates requests using a shared API Key via header `X-API-Key`.
+- **Private Network Access (PNA)**: Built-in middleware supporting secure HTTPS web clients (e.g., GitHub Pages) connecting to local Voice Server instances.
 
-This microservice acts as an upstream worker node for [VoiceClonerAppServer](https://github.com/NgoMinhToan/VoiceClonerAppServer).
+This microservice acts as an upstream worker node for [VoiceClonerAppServer](https://github.com/NgoMinhToan/VoiceClonerAppServer) and can be accessed directly by testing clients like [VoiceClonerWebDemo](https://github.com/NgoMinhToan/VoiceClonerWebDemo).
 
 ---
 
 ## 2. Configuration & Environment Variables
 
-Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
+Copy `.env.example` to `.env` or set environment variables:
 
-| Biến | Mặc định | Mô tả |
+| Variable | Default | Description |
 | :--- | :--- | :--- |
-| `PORT` | `8001` | Cổng HTTP lắng nghe của microservice |
-| `HOST` | `0.0.0.0` | Địa chỉ mạng lắng nghe |
-| `API_KEY` | `""` | API Key bảo vệ endpoint. Yêu cầu Header `X-API-Key` khi gọi |
-| `VIENEU_MODE` | `v3turbo` | Chế độ engine (`v3turbo` hoặc `v3nano`) |
-| `VIENEU_PRECISION` | `fp32` | Định dạng tensor (`fp32` hoặc `int8`) |
-| `VIENEU_THREADS` | `8` | Số luồng tính toán CPU ONNX Runtime |
-| `VIENEU_MODELS_DIR` | `/app/data/models` | Thư mục chứa trọng số mô hình VieNeu-TTS |
-| `VIENEU_SRC_DIR` | `/app/vieneu_src` | Đường dẫn mã nguồn VieNeu core |
+| `PORT` | `8001` | HTTP port listened by the microservice |
+| `HOST` | `0.0.0.0` | Network interface to bind |
+| `API_KEY` | `""` | Worker API key. If set, incoming requests must supply header `X-API-Key` |
+| `VIENEU_MODE` | `v3turbo` | Engine mode: `v3turbo` (48kHz HQ, default) or `v3nano` (24kHz lightweight) |
+| `VIENEU_PRECISION` | `fp32` | Tensor precision: `fp32` (maximum quality) or `int8` (accelerated) |
+| `VIENEU_THREADS` | `8` | Number of intra-op threads for ONNX Runtime inference |
+| `VIENEU_MODELS_DIR` | `/app/data/models` | Local directory for model checkpoint cache |
+| `HF_HOME` | `/app/data/models` | Hugging Face cache root directory |
+| `HF_HUB_OFFLINE` | `0` | Set to `1` only to strictly block internet access and force local cache |
 
 ---
 
-## 3. Chạy Server cục bộ
+## 3. Model Weights: Auto-Download vs Volume Mount
 
-### Chạy trực tiếp với Python:
+`vienueTTS_server` is fully self-sufficient and does not require local host source code mounts:
+
+### Option A: Automatic Download (Zero-Setup, Recommended for VPS)
+If you start the server on a fresh VPS without any pre-existing models:
+1. The server detects that the cache directory is empty.
+2. It automatically downloads the ONNX graphs and codec from Hugging Face:
+   - `pnnbao-ump/VieNeu-TTS-v3-Turbo` (subfolder `onnx_update`)
+   - `OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX`
+3. If volume `-v ./models:/app/data/models` is mounted, the downloaded files persist on the host disk so subsequent container restarts will not re-download.
+
+### Option B: Offline / Pre-downloaded Models
+If you already have downloaded model checkpoints on your host disk:
 ```bash
-# Cài đặt thư viện
-pip install -r requirements.txt
-
-# Khởi chạy server
-python main.py
-```
-
-### Chạy với Docker:
-```bash
-# Build image
-docker build -t vienuetts_server:latest .
-
-# Run container
 docker run -d \
   -p 8001:8001 \
   -e PORT=8001 \
   -e API_KEY=vtts_worker_secret_key_123 \
-  -v /path/to/models:/app/data/models:ro \
+  -v /path/to/models:/app/data/models \
   --name vienuetts-worker \
-  vienuetts_server:latest
+  ghcr.io/ngominhtoan/vienuetts_server:latest
 ```
 
 ---
 
-## 4. API Endpoints
+## 4. API Endpoints Specification
 
-### 4.1 Health Check (Mở, không cần API Key)
-- **URL**: `GET /internal/v1/health`
+### 4.1 Health Check (Open probe, no key required)
+- **Endpoint**: `GET /health` or `GET /internal/v1/health`
 - **Response**:
 ```json
 {
@@ -78,40 +76,93 @@ docker run -d \
   "precision": "fp32",
   "device": "cpu",
   "threads": 8,
-  "active_jobs": 0
+  "active_jobs": 0,
+  "total_voices": 23
 }
 ```
 
-### 4.2 Tổng Hợp Âm Thanh (Yêu cầu `X-API-Key`)
-- **URL**: `POST /internal/v1/synthesize`
-- **Headers**:
-  - `X-API-Key: vtts_worker_secret_key_123`
-  - `Content-Type: application/json`
-- **Request Body**:
+### 4.2 List Preset Voices (Requires `X-API-Key`)
+- **Endpoint**: `GET /internal/v1/voices` (or `/v1/voices`)
+- **Headers**: `X-API-Key: <API_KEY>`
+- **Response**:
 ```json
 {
-  "text": "Xin chào, đây là giọng đọc thử nghiệm.",
+  "total_count": 23,
+  "default_voice": "Minh Đức",
+  "voices": [
+    {
+      "id": "minh_duc",
+      "name": "Minh Đức",
+      "description": "Nam · Bắc · Phong cách tin tức",
+      "gender": "male",
+      "style": "tu_nhien",
+      "sample_rate": 48000
+    },
+    {
+      "id": "quynh_anh",
+      "name": "Quỳnh Anh",
+      "description": "Nữ · Bắc · Phong cách đọc truyện",
+      "gender": "female",
+      "style": "tu_nhien",
+      "sample_rate": 48000
+    }
+  ]
+}
+```
+
+### 4.3 Synthesize Speech (Requires `X-API-Key`)
+- **Endpoint**: `POST /internal/v1/synthesize` (or `/v1/synthesize`)
+- **Headers**:
+  - `X-API-Key: <API_KEY>`
+  - `Content-Type: application/json`
+- **Request Body (Preset Voice)**:
+```json
+{
+  "text": "Xin chào, đây là giọng đọc chuẩn AI VieNeu-TTS 48kHz.",
   "voice": "minh_duc",
   "speed": 1.0,
   "pitch": 0,
   "emotion": 0,
+  "denoise": true,
+  "smart_pause": true,
   "format": "wav"
 }
 ```
-- **Response**: Binary 48kHz WAV audio (`Content-Type: audio/wav`).
+- **Request Body (Cloned Voice with `.npz` Base64)**:
+```json
+{
+  "text": "Xin chào, đây là giọng đọc nhân bản từ file embedding .npz.",
+  "ref_npz_base64": "<base64_encoded_npz_data>",
+  "speed": 1.0,
+  "format": "wav"
+}
+```
+- **Response**: Binary 48kHz WAV audio (`Content-Type: audio/wav`) with headers `X-Sample-Rate: 48000` and `X-Execution-Time-Ms`.
 
-### 4.3 Trích Xuất Embedding Giọng Nói (Yêu cầu `X-API-Key`)
-- **URL**: `POST /internal/v1/embed`
-- **Headers**: `X-API-Key: vtts_worker_secret_key_123`
-- **Body**: `multipart/form-data` chứa file `audio_file` (WAV/M4A/MP3).
-- **Response**: Binary `.npz` chứa `speaker_emb` và `codes`.
+### 4.4 Extract Speaker Embedding (Requires `X-API-Key`)
+- **Endpoint**: `POST /internal/v1/embed` (or `/v1/embed`)
+- **Headers**: `X-API-Key: <API_KEY>`
+- **Body**: `multipart/form-data` with `audio_file` (WAV/M4A/MP3, 3 - 15 seconds clip).
+- **Response**: Binary `application/octet-stream` representing NumPy `.npz` file containing `speaker_emb` (192-d) and `codes`.
+
+### 4.5 Metrics Telemetry (Requires `X-API-Key`)
+- **Endpoint**: `GET /internal/v1/metrics`
+- **Headers**: `X-API-Key: <API_KEY>`
+- **Response**:
+```json
+{
+  "total_requests": 142,
+  "active_jobs": 0,
+  "avg_latency_ms": 3840.5
+}
+```
 
 ---
 
-## 5. CI/CD & GitHub Container Registry (GHCR)
+## 5. Testing & Verification
 
-Dự án tích hợp GitHub Actions workflow tự động:
-- Khi push vào branch `master` hoặc `main`, workflow sẽ đếm số lượng commit `v{count}`.
-- Tự động build và push image lên GHCR:
-  - `ghcr.io/ngominhtoan/vienuetts_server:latest`
-  - `ghcr.io/ngominhtoan/vienuetts_server:v{commit_count}`
+Run the comprehensive pytest suite:
+```bash
+pytest tests/ -v
+```
+All 12 test cases verify health probes, voice catalog, synthesis with preset and cloned `.npz`, and speaker embedding extraction.
