@@ -57,4 +57,8 @@
 - [x] Test tổng hợp giọng clone qua Base64 `.npz` (`test_synthesize_with_cloned_voice_npz_base64`).
 - [x] Test trích xuất speaker embedding `.npz` (`test_extract_speaker_embedding_embed_endpoint`).
 - [x] Test header Private Network Access PNA preflight (`test_pna_options_header`).
+- [x] Test giá trị biên (Boundary Value Analysis): text rỗng, text vượt 5000 ký tự, speed/pitch/emotion ngoài giới hạn (`test_synthesize_speed_out_of_bounds`, `test_synthesize_pitch_out_of_bounds`, `test_synthesize_emotion_out_of_bounds`).
+- [x] Test phòng vệ bảo mật: Chặn path traversal `ref_audio_path` (`../../etc/passwd`), chặn file đuôi cấm (`.exe`), chặn Base64 hỏng (`test_synthesize_path_traversal_ref_audio_rejected`, `test_synthesize_invalid_audio_extension_rejected`, `test_synthesize_invalid_base64_npz_rejected`).
+- [x] Test xử lý ngoại lệ tra cứu giọng không tồn tại 404 (`test_get_non_existent_voice_detail_returns_404`).
+- [x] Toàn bộ 21/21 test cases trong `vienueTTS_server/tests/` đều vượt qua 100%.
 - [x] Đạt 12/12 test case trong `vienueTTS_server/tests/test_inference_auth.py`.
