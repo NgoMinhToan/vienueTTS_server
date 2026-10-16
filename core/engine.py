@@ -77,29 +77,42 @@ class ModelEngineService:
         self._init_voice_catalog()
 
     def _init_env_paths(self):
+        # 1. Models directory & HF_HOME
         models_dir_env = os.getenv("VIENEU_MODELS_DIR")
-        if models_dir_env and Path(models_dir_env).exists():
+        if models_dir_env:
             models_dir = Path(models_dir_env)
         elif Path("/app/data/models").exists():
             models_dir = Path("/app/data/models")
-        else:
+        elif Path("D:/Project/vieneu-dubbling/data/models").exists():
             models_dir = Path("D:/Project/vieneu-dubbling/data/models")
-
-        if models_dir.exists():
-            os.environ["HF_HOME"] = str(models_dir.resolve())
-            os.environ["HF_HUB_OFFLINE"] = "1"
         else:
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            models_dir = Path.home() / ".cache" / "huggingface" / "hub"
 
+        try:
+            models_dir.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault("HF_HOME", str(models_dir.resolve()))
+        except Exception:
+            pass
+
+        # 2. HF_HUB_OFFLINE is optional and disabled by default to allow auto-downloading missing models
+        if "HF_HUB_OFFLINE" in os.environ:
+            val = os.environ["HF_HUB_OFFLINE"].strip().lower()
+            if val in ("1", "true", "yes"):
+                os.environ["HF_HUB_OFFLINE"] = "1"
+            else:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+
+        # 3. Optional local vieneu source path override for dev/debugging
         src_dir_env = os.getenv("VIENEU_SRC_DIR")
+        src_path = None
         if src_dir_env and Path(src_dir_env).exists():
             src_path = Path(src_dir_env)
-        elif Path("/app/vieneu_src").exists():
+        elif Path("/app/vieneu_src").exists() and (Path("/app/vieneu_src/vieneu").exists() or Path("/app/vieneu_src/factory.py").exists()):
             src_path = Path("/app/vieneu_src")
-        else:
+        elif Path("D:/Project/vieneu-dubbling/src").exists():
             src_path = Path("D:/Project/vieneu-dubbling/src")
 
-        if src_path.exists() and str(src_path.resolve()) not in sys.path:
+        if src_path and src_path.exists() and str(src_path.resolve()) not in sys.path:
             sys.path.insert(0, str(src_path.resolve()))
 
     def _init_voice_catalog(self):
