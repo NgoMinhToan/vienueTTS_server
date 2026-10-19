@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -68,6 +69,21 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"Starting vienueTTS_server on port {port} (API_KEY protected: {has_key})...")
     logger.info(f"Engine mode: {engine_service.engine_mode}, Threads: {engine_service.threads}, Voices: {voice_count}")
+
+    # Eager loading: Preload AI model on startup immediately
+    skip_preload = os.getenv("SKIP_MODEL_PRELOAD", "").strip().lower() in ("1", "true", "yes")
+    if not skip_preload:
+        logger.info("⏳ [STARTUP PRELOAD] Bắt đầu tìm kiếm checkpoint và nạp AI Inference Model vào bộ nhớ...")
+        t_load = time.perf_counter()
+        loaded = engine_service._load_engine()
+        if loaded is not None:
+            elapsed = time.perf_counter() - t_load
+            logger.info(f"✅ [STARTUP PRELOAD] Model VieNeu-TTS đã nạp thành công trong {elapsed:.2f}s! Sẵn sàng nhận yêu cầu suy luận 48kHz.")
+        else:
+            logger.error("❌ [STARTUP PRELOAD] Không thể nạp native Vieneu engine! Các request API sẽ trả mã lỗi 503 cho đến khi model sẵn sàng.")
+    else:
+        logger.info("ℹ️ [STARTUP PRELOAD] Bỏ qua nạp trước model do cấu hình SKIP_MODEL_PRELOAD=1.")
+
     yield
     print("\n[vienueTTS_server shutting down...]\n")
     logger.info("Shutting down vienueTTS_server.")

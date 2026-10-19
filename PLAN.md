@@ -60,5 +60,13 @@
 - [x] Test giá trị biên (Boundary Value Analysis): text rỗng, text vượt 5000 ký tự, speed/pitch/emotion ngoài giới hạn (`test_synthesize_speed_out_of_bounds`, `test_synthesize_pitch_out_of_bounds`, `test_synthesize_emotion_out_of_bounds`).
 - [x] Test phòng vệ bảo mật: Chặn path traversal `ref_audio_path` (`../../etc/passwd`), chặn file đuôi cấm (`.exe`), chặn Base64 hỏng (`test_synthesize_path_traversal_ref_audio_rejected`, `test_synthesize_invalid_audio_extension_rejected`, `test_synthesize_invalid_base64_npz_rejected`).
 - [x] Test xử lý ngoại lệ tra cứu giọng không tồn tại 404 (`test_get_non_existent_voice_detail_returns_404`).
-- [x] Toàn bộ 21/21 test cases trong `vienueTTS_server/tests/` đều vượt qua 100%.
-- [x] Đạt 12/12 test case trong `vienueTTS_server/tests/test_inference_auth.py`.
+- [x] Test trả mã lỗi HTTP 503 ngay lập tức khi model chưa sẵn sàng (`test_synthesize_returns_503_when_engine_unready`, `test_embed_returns_503_when_engine_unready`).
+- [x] Toàn bộ 23/23 test cases trong `vienueTTS_server/tests/` đều vượt qua 100%.
+- [x] Đạt 14/14 test case trong `vienueTTS_server/tests/test_inference_auth.py`.
+
+---
+
+## 6. Nâng Cấp Độ Tin Cậy & Khởi Động (Eager Loading & 503 Unready)
+- **Eager Preload lúc boot:** Server tự động nạp Vieneu engine ngay trong `lifespan` FastAPI lúc khởi động Docker, in log tiến trình và thời gian nạp chi tiết thay vì đợi lazy-loading ở request đầu tiên.
+- **Fail-Fast HTTP 503:** Loại bỏ hành vi âm thầm phát sóng hình sin 220Hz. Khi model chưa sẵn sàng hoặc không tải được weights, các API `/synthesize` và `/embed` lập tức trả về lỗi HTTP 503 Service Unavailable rõ ràng.
+- **Chuẩn hóa biến Hugging Face:** Hỗ trợ song song và đồng bộ hóa `HF_HOME`, `HF_HUB_OFFLINE`, và `VIENEU_MODELS_DIR`.

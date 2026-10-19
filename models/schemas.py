@@ -45,6 +45,7 @@ class VoiceItem(BaseModel):
     gender: str = Field("unknown", description="Giới tính: male/female")
     style: str = Field("tu_nhien", description="Phong cách thể hiện")
     sample_rate: int = Field(48000, description="Tần số lấy mẫu chuẩn (Hz)")
+    is_builtin: bool = Field(True, description="Giọng đọc có sẵn trong hệ thống")
 
 
 class VoiceListResponse(BaseModel):

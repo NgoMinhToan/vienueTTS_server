@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -161,6 +162,14 @@ async def synthesize(request: SynthesizeRequest):
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid Base64 ref_npz_base64: {e}")
 
+    # Immediately reject if engine is not ready and mock synthesis is not enabled
+    if not engine_service.is_ready():
+        if engine_service._load_engine() is None and not os.getenv("ALLOW_MOCK_SYNTHESIS", "").strip().lower() in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=503,
+                detail="Dịch vụ AI Voice Inference chưa sẵn sàng. Model đang khởi tạo hoặc không tìm thấy checkpoint trọng số (503 Service Unavailable).",
+            )
+
     await metrics_tracker.record_start()
     t0 = time.perf_counter()
     try:
@@ -202,6 +211,11 @@ async def synthesize(request: SynthesizeRequest):
     except ValueError as e:
         logger.warning(f"Validation error in synthesize: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Engine unready error in synthesize: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Inference synthesis error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -216,6 +230,13 @@ async def extract_speaker_embedding(audio_file: UploadFile = File(...)):
     Extract speaker embedding codes from reference audio file.
     Returns binary application/octet-stream representing NumPy .npz file.
     """
+    if not engine_service.is_ready():
+        if engine_service._load_engine() is None and not os.getenv("ALLOW_MOCK_SYNTHESIS", "").strip().lower() in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=503,
+                detail="Dịch vụ AI Voice Inference chưa sẵn sàng để trích xuất đặc trưng giọng (503 Service Unavailable).",
+            )
+
     await metrics_tracker.record_start()
     t0 = time.perf_counter()
     temp_in = None

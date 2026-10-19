@@ -142,3 +142,34 @@ def test_pna_options_header():
     }
     res = client.options("/internal/v1/synthesize", headers=headers)
     assert res.headers.get("access-control-allow-private-network") == "true" or res.headers.get("Access-Control-Allow-Private-Network") == "true"
+
+
+def test_synthesize_returns_503_when_engine_unready(monkeypatch):
+    from vienueTTS_server.core import engine
+
+    monkeypatch.setattr(engine.engine_service, "is_ready", lambda: False)
+    monkeypatch.setattr(engine.engine_service, "_load_engine", lambda: None)
+
+    res = client.post(
+        "/internal/v1/synthesize",
+        headers={"X-API-Key": "vtts_test_secret_123"},
+        json={"text": "Xin chào", "voice": "minh_duc"}
+    )
+    assert res.status_code == 503
+    assert "chưa sẵn sàng" in res.json()["detail"]
+
+
+def test_embed_returns_503_when_engine_unready(monkeypatch):
+    from vienueTTS_server.core import engine
+
+    monkeypatch.setattr(engine.engine_service, "is_ready", lambda: False)
+    monkeypatch.setattr(engine.engine_service, "_load_engine", lambda: None)
+
+    files = {"audio_file": ("sample.wav", b"RIFFdata", "audio/wav")}
+    res = client.post(
+        "/internal/v1/embed",
+        headers={"X-API-Key": "vtts_test_secret_123"},
+        files=files,
+    )
+    assert res.status_code == 503
+    assert "chưa sẵn sàng" in res.json()["detail"]

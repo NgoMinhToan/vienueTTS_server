@@ -30,9 +30,11 @@ Copy `.env.example` to `.env` or set environment variables:
 | `VIENEU_MODE` | `v3turbo` | Engine mode: `v3turbo` (48kHz HQ, default) or `v3nano` (24kHz lightweight) |
 | `VIENEU_PRECISION` | `fp32` | Tensor precision: `fp32` (maximum quality) or `int8` (accelerated) |
 | `VIENEU_THREADS` | `8` | Number of intra-op threads for ONNX Runtime inference |
-| `VIENEU_MODELS_DIR` | `/app/data/models` | Local directory for model checkpoint cache |
-| `HF_HOME` | `/app/data/models` | Hugging Face cache root directory |
-| `HF_HUB_OFFLINE` | `0` | Set to `1` only to strictly block internet access and force local cache |
+| `VIENEU_MODELS_DIR` | `/app/data/models` | Local directory for model checkpoint cache (synchronized with `HF_HOME`) |
+| `HF_HOME` | `/app/data/models` | Official Hugging Face cache root directory |
+| `HF_HUB_OFFLINE` | `0` | Set to `1` for air-gapped / offline mode; `0` allows auto-downloading missing weights |
+| `SKIP_MODEL_PRELOAD` | `0` | `0` (default) preloads model eagerly during boot; `1` skips eager startup preload |
+| `ALLOW_MOCK_SYNTHESIS` | `0` | `0` (default) fails fast with HTTP 503 if unready; `1` enables 220Hz mock sine wave in dev tests |
 
 ---
 

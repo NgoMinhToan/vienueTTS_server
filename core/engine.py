@@ -78,9 +78,13 @@ class ModelEngineService:
         self._init_voice_catalog()
 
     def _init_env_paths(self):
-        # 1. Models directory & HF_HOME
+        # 1. Models directory & HF_HOME synchronization
+        hf_home_env = os.getenv("HF_HOME")
         models_dir_env = os.getenv("VIENEU_MODELS_DIR")
-        if models_dir_env:
+
+        if hf_home_env:
+            models_dir = Path(hf_home_env)
+        elif models_dir_env:
             models_dir = Path(models_dir_env)
         elif Path("/app/data/models").exists():
             models_dir = Path("/app/data/models")
@@ -91,17 +95,19 @@ class ModelEngineService:
 
         try:
             models_dir.mkdir(parents=True, exist_ok=True)
-            os.environ.setdefault("HF_HOME", str(models_dir.resolve()))
+            resolved_path = str(models_dir.resolve())
+            os.environ.setdefault("HF_HOME", resolved_path)
+            os.environ.setdefault("VIENEU_MODELS_DIR", resolved_path)
         except Exception:
             pass
 
-        # 2. HF_HUB_OFFLINE is optional and disabled by default to allow auto-downloading missing models
+        # 2. HF_HUB_OFFLINE controls whether downloading from Hugging Face is allowed (0 = allow, 1 = offline only)
         if "HF_HUB_OFFLINE" in os.environ:
             val = os.environ["HF_HUB_OFFLINE"].strip().lower()
             if val in ("1", "true", "yes"):
                 os.environ["HF_HUB_OFFLINE"] = "1"
             else:
-                os.environ.pop("HF_HUB_OFFLINE", None)
+                os.environ["HF_HUB_OFFLINE"] = "0"
 
         # 3. Optional local vieneu source path override for dev/debugging
         src_dir_env = os.getenv("VIENEU_SRC_DIR")
@@ -153,6 +159,7 @@ class ModelEngineService:
                     "gender": meta.get("gender", "unknown"),
                     "style": meta.get("style", "tu_nhien"),
                     "sample_rate": SAMPLE_RATE,
+                    "is_builtin": True,
                 })
         else:
             for item in BUILTIN_PRESET_METADATA:
@@ -168,26 +175,38 @@ class ModelEngineService:
                     "gender": item["gender"],
                     "style": "tu_nhien",
                     "sample_rate": SAMPLE_RATE,
+                    "is_builtin": True,
                 })
+
+    def is_ready(self) -> bool:
+        """Check if native Vieneu inference engine is loaded and ready."""
+        return self._engine is not None
 
     def _load_engine(self):
         if self._engine is not None:
             return self._engine
         try:
             self._init_env_paths()
+            hf_home = os.getenv("HF_HOME", "default")
+            hf_offline = os.getenv("HF_HUB_OFFLINE", "0")
+            logger.info(f"⏳ [MODEL ENGINE] Initializing core Vieneu inference engine... (HF_HOME='{hf_home}', HF_HUB_OFFLINE={hf_offline})")
             from vieneu import Vieneu
-            logger.info("Initializing core Vieneu inference engine...")
+            t0 = time.perf_counter()
             self._engine = Vieneu()
-            logger.info(f"Vieneu inference engine loaded successfully with {len(self._engine._preset_voices)} voices.")
+            elapsed = time.perf_counter() - t0
+            voice_count = len(self._engine._preset_voices) if hasattr(self._engine, "_preset_voices") else len(self._voices_cache)
+            logger.info(f"✅ [MODEL ENGINE] Vieneu inference engine loaded successfully with {voice_count} voices in {elapsed:.2f}s.")
             # Update slug map with real loaded engine voices
-            for name in self._engine._preset_voices.keys():
-                slug = slugify_voice_name(name)
-                self._slug_to_name[slug] = name
-                self._slug_to_name[name.lower()] = name
-                self._slug_to_name[name] = name
+            if hasattr(self._engine, "_preset_voices"):
+                for name in self._engine._preset_voices.keys():
+                    slug = slugify_voice_name(name)
+                    self._slug_to_name[slug] = name
+                    self._slug_to_name[name.lower()] = name
+                    self._slug_to_name[name] = name
             return self._engine
         except Exception as e:
-            logger.warning(f"Could not load native Vieneu engine ({e}). Fallback to mock synthesis.")
+            logger.error(f"❌ [MODEL ENGINE] Could not load native Vieneu engine: {e}", exc_info=True)
+            self._engine = None
             return None
 
     def list_voices(self) -> List[Dict[str, Any]]:
@@ -274,14 +293,17 @@ class ModelEngineService:
             )
             return audio_arr, SAMPLE_RATE
 
-        # Fallback sine wave tone for unit test/dev mode without model checkpoint
-        duration = min(3.0, max(0.5, len(text) * 0.05 / max(0.5, speed)))
-        t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False, dtype=np.float32)
-        base_freq = 220.0 * (2.0 ** (pitch / 12.0))
-        audio = 0.25 * np.sin(2.0 * np.pi * base_freq * t)
-        elapsed = time.perf_counter() - t0
-        logger.info(f"⚠️ [MOCK SYNTHESIS] Generated {duration:.2f}s fallback audio @ {SAMPLE_RATE}Hz in {elapsed:.2f}s")
-        return audio, SAMPLE_RATE
+        # Fallback sine wave tone is ONLY permitted if explicitly enabled via ALLOW_MOCK_SYNTHESIS=1
+        if os.getenv("ALLOW_MOCK_SYNTHESIS", "").strip().lower() in ("1", "true", "yes"):
+            duration = min(3.0, max(0.5, len(text) * 0.05 / max(0.5, speed)))
+            t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False, dtype=np.float32)
+            base_freq = 220.0 * (2.0 ** (pitch / 12.0))
+            audio = 0.25 * np.sin(2.0 * np.pi * base_freq * t)
+            elapsed = time.perf_counter() - t0
+            logger.warning(f"⚠️ [MOCK SYNTHESIS] ALLOW_MOCK_SYNTHESIS is enabled: Generated {duration:.2f}s fallback audio @ {SAMPLE_RATE}Hz in {elapsed:.2f}s")
+            return audio, SAMPLE_RATE
+
+        raise RuntimeError("AI inference engine is not ready or failed to load. Checkpoint files unavailable.")
 
     def precompute_voice_embeddings(self, audio_path: str, output_npz_path: Path) -> bool:
         t0 = time.perf_counter()
@@ -306,13 +328,16 @@ class ModelEngineService:
             except Exception as e:
                 logger.warning(f"Extract features warning: {e}")
 
-        # Default fallback embedding arrays
-        speaker_emb = np.zeros(192, dtype=np.float32)
-        codes = np.zeros((1, 256), dtype=np.int64)
-        np.savez(output_npz_path, speaker_emb=speaker_emb, codes=codes)
-        elapsed = time.perf_counter() - t0
-        logger.info(f"⚠️ [VOICE ENROLLMENT] Saved fallback speaker embedding to {output_npz_path.name} in {elapsed:.2f}s")
-        return True
+        # Fallback speaker embedding array ONLY if ALLOW_MOCK_SYNTHESIS=1
+        if os.getenv("ALLOW_MOCK_SYNTHESIS", "").strip().lower() in ("1", "true", "yes"):
+            speaker_emb = np.zeros(192, dtype=np.float32)
+            codes = np.zeros((1, 256), dtype=np.int64)
+            np.savez(output_npz_path, speaker_emb=speaker_emb, codes=codes)
+            elapsed = time.perf_counter() - t0
+            logger.warning(f"⚠️ [VOICE ENROLLMENT] ALLOW_MOCK_SYNTHESIS is enabled: Saved fallback speaker embedding to {output_npz_path.name} in {elapsed:.2f}s")
+            return True
+
+        raise RuntimeError("AI inference engine is not ready or failed to load. Cannot extract speaker embedding.")
 
 
 engine_service = ModelEngineService()

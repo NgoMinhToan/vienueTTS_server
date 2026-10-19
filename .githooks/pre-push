@@ -4,7 +4,21 @@ echo "========================================================="
 echo "🔍 [PRE-PUSH HOOK] Running vienueTTS_server pytest suite..."
 echo "========================================================="
 
-python -m pytest tests/ -v
+if [ -f "/d/Project/vieneu-dubbling/.venv/Scripts/python.exe" ]; then
+    PYTHON_BIN="/d/Project/vieneu-dubbling/.venv/Scripts/python.exe"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+else
+    PYTHON_BIN="python"
+fi
+
+if command -v cygpath >/dev/null 2>&1; then
+    export PYTHONPATH="$(cygpath -w ..)"
+else
+    export PYTHONPATH="..:$PYTHONPATH"
+fi
+
+"$PYTHON_BIN" -m pytest tests/ -v
 STATUS=$?
 
 if [ $STATUS -ne 0 ]; then
