@@ -77,6 +77,7 @@ def test_synthesize_rejected_with_invalid_api_key():
 
 def test_synthesize_accepted_with_valid_api_key(monkeypatch):
     from vienueTTS_server.core import engine
+    monkeypatch.setattr(engine.engine_service, "is_ready", lambda: True)
     monkeypatch.setattr(engine.engine_service, "synthesize", lambda **kwargs: (b"RIFFmockWAVdata", 48000))
 
     response = client.post(
@@ -92,6 +93,7 @@ def test_synthesize_accepted_with_valid_api_key(monkeypatch):
 def test_synthesize_with_cloned_voice_npz_base64(monkeypatch):
     from vienueTTS_server.core import engine
 
+    monkeypatch.setattr(engine.engine_service, "is_ready", lambda: True)
     received_kwargs = {}
     def mock_synthesize(**kwargs):
         received_kwargs.update(kwargs)
@@ -114,8 +116,16 @@ def test_synthesize_with_cloned_voice_npz_base64(monkeypatch):
     assert received_kwargs.get("ref_npz_bytes") is not None
 
 
-def test_extract_speaker_embedding_embed_endpoint():
+def test_extract_speaker_embedding_embed_endpoint(monkeypatch):
     import soundfile as sf
+    from vienueTTS_server.core import engine
+
+    monkeypatch.setattr(engine.engine_service, "is_ready", lambda: True)
+    def mock_precompute(audio_path, output_npz_path):
+        np.savez(output_npz_path, speaker_emb=np.ones(192, dtype=np.float32), codes=np.zeros((1, 256), dtype=np.int64))
+        return True
+    monkeypatch.setattr(engine.engine_service, "precompute_voice_embeddings", mock_precompute)
+
     buf = io.BytesIO()
     sample_audio = (0.2 * np.sin(2 * np.pi * 440 * np.linspace(0, 1.0, 16000))).astype(np.float32)
     sf.write(buf, sample_audio, 16000, format="WAV")
@@ -147,6 +157,7 @@ def test_pna_options_header():
 def test_synthesize_returns_503_when_engine_unready(monkeypatch):
     from vienueTTS_server.core import engine
 
+    monkeypatch.delenv("ALLOW_MOCK_SYNTHESIS", raising=False)
     monkeypatch.setattr(engine.engine_service, "is_ready", lambda: False)
     monkeypatch.setattr(engine.engine_service, "_load_engine", lambda: None)
 
@@ -162,6 +173,7 @@ def test_synthesize_returns_503_when_engine_unready(monkeypatch):
 def test_embed_returns_503_when_engine_unready(monkeypatch):
     from vienueTTS_server.core import engine
 
+    monkeypatch.delenv("ALLOW_MOCK_SYNTHESIS", raising=False)
     monkeypatch.setattr(engine.engine_service, "is_ready", lambda: False)
     monkeypatch.setattr(engine.engine_service, "_load_engine", lambda: None)
 
