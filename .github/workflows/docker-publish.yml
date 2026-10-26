@@ -32,6 +32,7 @@ jobs:
       - name: Run Pytest Test Suite
         env:
           API_KEY: vtts_test_secret_123
+          PYTHONPATH: ".."
         run: |
           pytest tests/ -v
 
