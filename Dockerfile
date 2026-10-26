@@ -4,6 +4,8 @@ FROM python:3.12-slim
 # Prevent Python from writing .pyc files and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_SYMLINKS=1 \
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
     DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app

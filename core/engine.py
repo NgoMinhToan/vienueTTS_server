@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 import unicodedata
@@ -98,6 +99,9 @@ class ModelEngineService:
             resolved_path = str(models_dir.resolve())
             os.environ.setdefault("HF_HOME", resolved_path)
             os.environ.setdefault("VIENEU_MODELS_DIR", resolved_path)
+            # Disable symlinks in Hugging Face cache to ensure .onnx and .data stay in same folder on Linux
+            os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+            os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
         except Exception:
             pass
 
@@ -178,6 +182,41 @@ class ModelEngineService:
                     "is_builtin": True,
                 })
 
+    def _dereference_model_symlinks(self, directory: Optional[Path] = None):
+        """
+        On Linux/Docker, huggingface_hub uses symlinks to blobs/, which causes ONNX Runtime
+        to reject split models (vieneu_prefill.onnx & vieneu_backbone_shared.data) with:
+        'External data path validation failed: Error: External data path escapes model directory'.
+        This method automatically dereferences existing symlinks in the snapshot cache,
+        replacing each symlink with a direct copy of its target file so all files reside in the same folder.
+        """
+        if directory is None:
+            hf_home = os.getenv("HF_HOME")
+            directory = Path(hf_home) if hf_home else Path("/app/data/models")
+        if not directory.exists():
+            return
+        dereferenced_count = 0
+        try:
+            for root, _, files in os.walk(directory):
+                for f in files:
+                    file_path = Path(root) / f
+                    if file_path.is_symlink():
+                        suffix = file_path.suffix.lower()
+                        if suffix in (".onnx", ".data", ".npz", ".json", ".bin") or f.endswith(".data"):
+                            try:
+                                target = file_path.resolve()
+                                if target.exists() and target.is_file():
+                                    file_path.unlink()
+                                    shutil.copy2(target, file_path)
+                                    dereferenced_count += 1
+                                    logger.info(f"🔧 [SYMLINK RESOLVED] Dereferenced model symlink to real file: {file_path.name}")
+                            except Exception as e:
+                                logger.warning(f"Could not dereference symlink {file_path}: {e}")
+            if dereferenced_count > 0:
+                logger.info(f"✅ [SYMLINK RESOLUTION] Successfully converted {dereferenced_count} model symlinks to real files for ONNX Runtime compatibility.")
+        except Exception as e:
+            logger.warning(f"Error checking model symlinks in {directory}: {e}")
+
     def is_ready(self) -> bool:
         """Check if native Vieneu inference engine is loaded and ready."""
         return self._engine is not None
@@ -189,10 +228,23 @@ class ModelEngineService:
             self._init_env_paths()
             hf_home = os.getenv("HF_HOME", "default")
             hf_offline = os.getenv("HF_HUB_OFFLINE", "0")
+            models_dir = Path(hf_home) if hf_home != "default" else Path("/app/data/models")
+            self._dereference_model_symlinks(models_dir)
+
             logger.info(f"⏳ [MODEL ENGINE] Initializing core Vieneu inference engine... (HF_HOME='{hf_home}', HF_HUB_OFFLINE={hf_offline})")
             from vieneu import Vieneu
             t0 = time.perf_counter()
-            self._engine = Vieneu()
+            try:
+                self._engine = Vieneu()
+            except Exception as load_err:
+                err_str = str(load_err)
+                if "External data path" in err_str or "escapes model directory" in err_str:
+                    logger.warning(f"⚠️ [ONNX SYMLINK DETECTED] {load_err}. Dereferencing cache symlinks and retrying...")
+                    self._dereference_model_symlinks(models_dir)
+                    self._engine = Vieneu()
+                else:
+                    raise load_err
+
             elapsed = time.perf_counter() - t0
             voice_count = len(self._engine._preset_voices) if hasattr(self._engine, "_preset_voices") else len(self._voices_cache)
             logger.info(f"✅ [MODEL ENGINE] Vieneu inference engine loaded successfully with {voice_count} voices in {elapsed:.2f}s.")

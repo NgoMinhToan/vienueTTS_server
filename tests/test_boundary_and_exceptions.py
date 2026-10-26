@@ -119,3 +119,31 @@ def test_get_non_existent_voice_detail_returns_404():
     )
     assert res.status_code == 404
     assert "not found" in res.json()["detail"].lower()
+
+
+def test_dereference_model_symlinks(tmp_path):
+    from pathlib import Path
+    from vienueTTS_server.core.engine import engine_service
+
+    blob_dir = tmp_path / "hub" / "blobs" / "5c"
+    blob_dir.mkdir(parents=True)
+    real_data = blob_dir / "target_weights.data"
+    real_data.write_bytes(b"ONNX_WEIGHTS_DATA_123456789")
+
+    snapshot_dir = tmp_path / "hub" / "models--test" / "snapshots" / "rev1"
+    snapshot_dir.mkdir(parents=True)
+    symlink_file = snapshot_dir / "vieneu_backbone_shared.data"
+
+    try:
+        symlink_file.symlink_to(real_data)
+    except (OSError, NotImplementedError):
+        # On Windows without developer mode/admin privileges, symlink creation may require privilege
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    assert symlink_file.is_symlink()
+
+    engine_service._dereference_model_symlinks(tmp_path)
+
+    assert not symlink_file.is_symlink()
+    assert symlink_file.is_file()
+    assert symlink_file.read_bytes() == b"ONNX_WEIGHTS_DATA_123456789"
