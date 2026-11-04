@@ -4,8 +4,10 @@ echo "========================================================="
 echo "🔍 [PRE-PUSH HOOK] Running vienueTTS_server pytest suite..."
 echo "========================================================="
 
-if [ -f "/d/Project/vieneu-dubbling/.venv/Scripts/python.exe" ]; then
-    PYTHON_BIN="/d/Project/vieneu-dubbling/.venv/Scripts/python.exe"
+if [ -f "../.venv/Scripts/python.exe" ]; then
+    PYTHON_BIN="../.venv/Scripts/python.exe"
+elif [ -f ".venv/Scripts/python.exe" ]; then
+    PYTHON_BIN=".venv/Scripts/python.exe"
 elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
 else

@@ -89,8 +89,10 @@ class ModelEngineService:
             models_dir = Path(models_dir_env)
         elif Path("/app/data/models").exists():
             models_dir = Path("/app/data/models")
-        elif Path("D:/Project/vieneu-dubbling/data/models").exists():
-            models_dir = Path("D:/Project/vieneu-dubbling/data/models")
+        elif Path("models").exists():
+            models_dir = Path("models")
+        elif Path("data/models").exists():
+            models_dir = Path("data/models")
         else:
             models_dir = Path.home() / ".cache" / "huggingface" / "hub"
 
@@ -120,8 +122,8 @@ class ModelEngineService:
             src_path = Path(src_dir_env)
         elif Path("/app/vieneu_src").exists() and (Path("/app/vieneu_src/vieneu").exists() or Path("/app/vieneu_src/factory.py").exists()):
             src_path = Path("/app/vieneu_src")
-        elif Path("D:/Project/vieneu-dubbling/src").exists():
-            src_path = Path("D:/Project/vieneu-dubbling/src")
+        elif Path("vieneu_src").exists():
+            src_path = Path("vieneu_src")
 
         if src_path and src_path.exists() and str(src_path.resolve()) not in sys.path:
             sys.path.insert(0, str(src_path.resolve()))
@@ -131,12 +133,20 @@ class ModelEngineService:
         self._voices_cache = []
         self._slug_to_name = {}
 
-        # Look for voices_v3_turbo.json in vieneu assets
+        # Look for voices_v3_turbo.json in package or vieneu assets
         json_path = None
-        for p in [
+        candidate_paths = [
             Path("/app/vieneu_src/vieneu/assets/voices_v3_turbo.json"),
-            Path("D:/Project/vieneu-dubbling/src/vieneu/assets/voices_v3_turbo.json"),
-        ]:
+            Path("vieneu_src/vieneu/assets/voices_v3_turbo.json"),
+            Path("assets/voices_v3_turbo.json"),
+        ]
+        try:
+            import vieneu
+            candidate_paths.append(Path(vieneu.__file__).parent / "assets" / "voices_v3_turbo.json")
+        except Exception:
+            pass
+
+        for p in candidate_paths:
             if p.exists():
                 json_path = p
                 break
