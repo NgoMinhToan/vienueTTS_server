@@ -147,3 +147,16 @@ def test_dereference_model_symlinks(tmp_path):
     assert not symlink_file.is_symlink()
     assert symlink_file.is_file()
     assert symlink_file.read_bytes() == b"ONNX_WEIGHTS_DATA_123456789"
+
+def test_synthesize_missing_ref_audio_path_returns_400():
+    res = client.post(
+        "/internal/v1/synthesize",
+        headers=VALID_HEADERS,
+        json={
+            "text": "Xin chào",
+            "voice": "minh_duc",
+            "ref_audio_path": "/app/VoiceClonerAppServer/storage/cloned_voices/does_not_exist.wav",
+        },
+    )
+    assert res.status_code == 400
+    assert "không tồn tại trên worker" in res.json()["detail"]

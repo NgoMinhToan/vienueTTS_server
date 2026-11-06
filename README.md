@@ -140,6 +140,9 @@ docker run -d \
 }
 ```
 - **Response**: Binary 48kHz WAV audio (`Content-Type: audio/wav`) with headers `X-Sample-Rate: 48000` and `X-Execution-Time-Ms`.
+- **Error contract**:
+  - `400` — the request itself is invalid, including `ref_audio_path` pointing at a file that does not exist on **this worker's** filesystem (paths are host-local; send `ref_npz_base64` instead).
+  - `503` — the engine is not ready or raised an internal error. Gateways should treat `4xx` as an input error and `5xx` as a worker fault when updating circuit breakers.
 
 ### 4.4 Extract Speaker Embedding (Requires `X-API-Key`)
 - **Endpoint**: `POST /internal/v1/embed` (or `/v1/embed`)

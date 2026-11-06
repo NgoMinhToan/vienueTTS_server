@@ -55,7 +55,15 @@ def validate_ref_audio_path(ref_audio_path: Optional[str]) -> Optional[str]:
             status_code=400,
             detail=f"Tệp âm thanh tham chiếu không hợp lệ. Đuôi tệp cho phép: {', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}",
         )
-    return validate_file_path(ref_audio_path)
+    resolved = validate_file_path(ref_audio_path)
+    if not Path(resolved).is_file():
+        # A path that only exists on the gateway is a request error, not a
+        # worker failure; returning 503 here would trip gateway circuit breakers.
+        raise HTTPException(
+            status_code=400,
+            detail="Tệp âm thanh tham chiếu không tồn tại trên worker.",
+        )
+    return resolved
 
 
 class InferenceMetricsTracker:

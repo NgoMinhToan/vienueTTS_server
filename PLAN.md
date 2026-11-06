@@ -61,6 +61,7 @@
 - [x] Test phòng vệ bảo mật: Chặn path traversal `ref_audio_path` (`../../etc/passwd`), chặn file đuôi cấm (`.exe`), chặn Base64 hỏng (`test_synthesize_path_traversal_ref_audio_rejected`, `test_synthesize_invalid_audio_extension_rejected`, `test_synthesize_invalid_base64_npz_rejected`).
 - [x] Test xử lý ngoại lệ tra cứu giọng không tồn tại 404 (`test_get_non_existent_voice_detail_returns_404`).
 - [x] Test trả mã lỗi HTTP 503 ngay lập tức khi model chưa sẵn sàng (`test_synthesize_returns_503_when_engine_unready`, `test_embed_returns_503_when_engine_unready`).
+- [x] Test `ref_audio_path` trỏ tới tệp không tồn tại trên worker trả về HTTP 400 (không phải 503), để gateway không tính đó là lỗi worker (`test_synthesize_missing_ref_audio_path_returns_400`).
 - [x] Toàn bộ 23/23 test cases trong `vienueTTS_server/tests/` đều vượt qua 100%.
 - [x] Đạt 14/14 test case trong `vienueTTS_server/tests/test_inference_auth.py`.
 
