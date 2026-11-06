@@ -16,11 +16,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Optional build-time override for the vieneu package version.
+# Empty (default) keeps requirements.txt untouched, which is what the
+# automatic publish workflow uses. The manual workflow passes an explicit
+# version so several model generations can be built and run side by side.
+ARG VIENEU_VERSION=""
+
 # Install python dependencies with BuildKit pip cache mount, prune unused GUI bloat and test files
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip setuptools wheel && \
+    if [ -n "${VIENEU_VERSION}" ]; then \
+        echo "Overriding vieneu version: ${VIENEU_VERSION}"; \
+        sed -i -E "s|^vieneu([<>=!~].*)?$|vieneu==${VIENEU_VERSION}|" requirements.txt; \
+        grep -Eq '^vieneu==[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9.-]*)?$' requirements.txt; \
+    else \
+        echo "Using vieneu version from requirements.txt"; \
+    fi && \
     pip install --no-compile -r requirements.txt && \
+    python -c "from importlib.metadata import version; print('Installed vieneu', version('vieneu'))" && \
     pip uninstall -y gradio gradio_client altair matplotlib ffmpy 2>/dev/null || true && \
     find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
     find /opt/venv -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
@@ -28,6 +42,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Stage 2: Minimal runtime image without build-essential
 FROM python:3.12-slim AS runner
+
+# Exposed as a label so the baked model generation is identifiable even when
+# the deployment pins a digest instead of the vieneu-<version> tag.
+ARG VIENEU_VERSION=""
+LABEL org.opencontainers.image.vieneu.version="${VIENEU_VERSION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

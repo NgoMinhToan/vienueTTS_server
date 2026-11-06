@@ -71,3 +71,14 @@
 - **Eager Preload lúc boot:** Server tự động nạp Vieneu engine ngay trong `lifespan` FastAPI lúc khởi động Docker, in log tiến trình và thời gian nạp chi tiết thay vì đợi lazy-loading ở request đầu tiên.
 - **Fail-Fast HTTP 503:** Loại bỏ hành vi âm thầm phát sóng hình sin 220Hz. Khi model chưa sẵn sàng hoặc không tải được weights, các API `/synthesize` và `/embed` lập tức trả về lỗi HTTP 503 Service Unavailable rõ ràng.
 - **Chuẩn hóa biến Hugging Face:** Hỗ trợ song song và đồng bộ hóa `HF_HOME`, `HF_HUB_OFFLINE`, và `VIENEU_MODELS_DIR`.
+
+---
+
+## 7. Build Đa Phiên Bản vieneu (Manual Workflow)
+- **Mục tiêu:** Cho phép chạy song song nhiều thế hệ model (ví dụ `3.7.1` giữ bộ 23 giọng cũ và `3.8.3` dùng bộ 25 giọng mới) từ cùng một codebase.
+- **Workflow tự động (`docker-publish.yml`):** Giữ nguyên hành vi cũ, luôn build theo `vieneu` khai báo trong `requirements.txt`, tag `latest` + `v<commit-count>`.
+- **Workflow thủ công (`docker-publish-vieneu.yml`):** Chỉ chạy qua `workflow_dispatch`, cho chọn cố định một trong các phiên bản `3.7.1`, `3.8.0`, `3.8.1`, `3.8.2`, `3.8.3`.
+- **Cơ chế build:** Truyền build-arg `VIENEU_VERSION`; Dockerfile chỉ sửa dòng `vieneu` trong `requirements.txt` khi build-arg có giá trị. Không truyền thì dùng đúng `requirements.txt`.
+- **Tag đầu ra:** `vieneu-<version>` và `vieneu-<version>-v<commit-count>`, không ghi đè `latest`.
+- **Vận hành nhiều version:** Mỗi container nên mount volume model riêng (`/app/data/models`) để tránh xung đột checkpoint giữa các thế hệ.
+- **Kiểm chứng:** `docker buildx build --call=check`, `actionlint`, build thực tế `VIENEU_VERSION=3.7.1` (23 giọng, có `Minh Quân`) và build không build-arg (`vieneu 3.8.3` từ `requirements.txt`). Toàn bộ 25/25 pytest pass.

@@ -62,6 +62,38 @@ docker run -d \
   ghcr.io/ngominhtoan/vienuetts_server:latest
 ```
 
+### Option C: Versioned Builds (Manual Workflow)
+The automatic `docker-publish.yml` workflow always builds the `vieneu` version
+declared in `requirements.txt` and keeps publishing `:latest` + `:v<count>`.
+
+To bake a specific `vieneu` version into a separate image (so older and newer
+model generations can run side by side), run the manual GitHub Actions workflow
+**Manual Build - Selectable VieNeu Version** (`docker-publish-vieneu.yml`) and
+pick one of the known versions: `3.7.1`, `3.8.0`, `3.8.1`, `3.8.2`, `3.8.3`.
+
+The workflow passes `VIENEU_VERSION` as a Docker build argument and publishes:
+
+```
+ghcr.io/<owner>/vienuetts_server:vieneu-<version>
+ghcr.io/<owner>/vienuetts_server:vieneu-<version>-v<commit-count>
+```
+
+It intentionally does **not** overwrite `:latest`. Example:
+
+```bash
+docker run -d \
+  -p 8001:8001 \
+  -e PORT=8001 \
+  -e API_KEY=vtts_worker_secret_key_123 \
+  -v /path/to/models-3.7.1:/app/data/models \
+  --name vienuetts-worker-3-7-1 \
+  ghcr.io/ngominhtoan/vienuetts_server:vieneu-3.7.1
+```
+
+When running several generations at once, mount a **separate model volume per
+container** so their Hugging Face checkpoints do not share or overwrite each
+other.
+
 ---
 
 ## 4. API Endpoints Specification
