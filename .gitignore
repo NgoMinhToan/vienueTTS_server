@@ -2,3 +2,12 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+.venv/
+venv/
+storage/
+*.db
+*.sqlite3
+.superpowers/
+.DS_Store
+
+# models/ is a Python package (schemas), not a weight directory — do not ignore it.

@@ -1,158 +1,25 @@
 # vienueTTS_server
 
-Stateless AI text-to-speech inference and voice embedding microservice powered by **VieNeu-TTS v3 Turbo/Nano** (Vietnamese and English, standard 48kHz WAV audio output).
+Stateless AI inference worker for the Voice Cloner platform. It runs VieNeu-TTS v3 Turbo/Nano through ONNX Runtime and returns **48 kHz WAV** audio for Vietnamese and English text.
 
----
+## Endpoints
 
-## 1. Overview & Architecture
+Both the internal and client prefixes are mounted:
 
-`vienueTTS_server` is designed as a lightweight, stateless microservice dedicated solely to AI inference tasks:
-- **TTS Synthesis (`POST /internal/v1/synthesize`)**: Synthesizes speech from text at 48kHz sampling rate. Supports 23 built-in preset voices and instant cloned voices (via `.npz` speaker embedding or audio reference).
-- **Preset Voices Catalog (`GET /internal/v1/voices`)**: Exposes list of 23 built-in voices with descriptions, regional accents (Bắc, Trung, Nam), genders, and metadata.
-- **Voice Embedding Extraction (`POST /internal/v1/embed`)**: Extracts speaker embedding features (`.npz` with 192-d embedding and reference codes) from reference audio files for voice cloning.
-- **Health & Metrics Probes (`GET /internal/v1/health`, `GET /internal/v1/metrics`)**: Exposes engine readiness, total voices, active jobs, and inference latency telemetry.
-- **Security**: Authenticates requests using a shared API Key via header `X-API-Key`.
-- **Private Network Access (PNA)**: Built-in middleware supporting secure HTTPS web clients (e.g., GitHub Pages) connecting to local Voice Server instances.
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health`, `/internal/v1/health` | none | Liveness, engine mode, voice count, active jobs |
+| `GET` | `/internal/v1/voices`, `/v1/voices` | `X-API-Key` | Dynamic preset voice catalog |
+| `GET` | `/internal/v1/voices/{id}` | `X-API-Key` | One preset by id or name |
+| `POST` | `/internal/v1/synthesize`, `/v1/synthesize` | `X-API-Key` | Text → 48 kHz WAV (preset or cloned voice) |
+| `POST` | `/internal/v1/embed`, `/v1/embed` | `X-API-Key` | Reference audio → `.npz` speaker embedding |
+| `GET` | `/internal/v1/metrics` | `X-API-Key` | Request count, active jobs, average latency |
 
-This microservice acts as an upstream worker node for [VoiceClonerAppServer](https://github.com/NgoMinhToan/VoiceClonerAppServer) and can be accessed directly by testing clients like [VoiceClonerWebDemo](https://github.com/NgoMinhToan/VoiceClonerWebDemo).
+### Synthesize request
 
----
-
-## 2. Configuration & Environment Variables
-
-Copy `.env.example` to `.env` or set environment variables:
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `PORT` | `8001` | HTTP port listened by the microservice |
-| `HOST` | `0.0.0.0` | Network interface to bind |
-| `API_KEY` | `""` | Worker API key. If set, incoming requests must supply header `X-API-Key` |
-| `VIENEU_MODE` | `v3turbo` | Engine mode: `v3turbo` (48kHz HQ, default) or `v3nano` (24kHz lightweight) |
-| `VIENEU_PRECISION` | `fp32` | Tensor precision: `fp32` (maximum quality) or `int8` (accelerated) |
-| `VIENEU_THREADS` | `8` | Number of intra-op threads for ONNX Runtime inference |
-| `VIENEU_MODELS_DIR` | `/app/data/models` | Local directory for model checkpoint cache (synchronized with `HF_HOME`) |
-| `HF_HOME` | `/app/data/models` | Official Hugging Face cache root directory |
-| `HF_HUB_OFFLINE` | `0` | Set to `1` for air-gapped / offline mode; `0` allows auto-downloading missing weights |
-| `SKIP_MODEL_PRELOAD` | `0` | `0` (default) preloads model eagerly during boot; `1` skips eager startup preload |
-| `ALLOW_MOCK_SYNTHESIS` | `0` | `0` (default) fails fast with HTTP 503 if unready; `1` enables 220Hz mock sine wave in dev tests |
-
----
-
-## 3. Model Weights: Auto-Download vs Volume Mount
-
-`vienueTTS_server` is fully self-sufficient and does not require local host source code mounts:
-
-### Option A: Automatic Download (Zero-Setup, Recommended for VPS)
-If you start the server on a fresh VPS without any pre-existing models:
-1. The server detects that the cache directory is empty.
-2. It automatically downloads the ONNX graphs and codec from Hugging Face:
-   - `pnnbao-ump/VieNeu-TTS-v3-Turbo` (subfolder `onnx_update`)
-   - `OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX`
-3. If volume `-v ./models:/app/data/models` is mounted, the downloaded files persist on the host disk so subsequent container restarts will not re-download.
-
-### Option B: Offline / Pre-downloaded Models
-If you already have downloaded model checkpoints on your host disk:
-```bash
-docker run -d \
-  -p 8001:8001 \
-  -e PORT=8001 \
-  -e API_KEY=vtts_worker_secret_key_123 \
-  -v /path/to/models:/app/data/models \
-  --name vienuetts-worker \
-  ghcr.io/ngominhtoan/vienuetts_server:latest
-```
-
-### Option C: Versioned Builds (Manual Workflow)
-The automatic `docker-publish.yml` workflow always builds the `vieneu` version
-declared in `requirements.txt` and keeps publishing `:latest` + `:v<count>`.
-
-To bake a specific `vieneu` version into a separate image (so older and newer
-model generations can run side by side), run the manual GitHub Actions workflow
-**Manual Build - Selectable VieNeu Version** (`docker-publish-vieneu.yml`) and
-pick one of the known versions: `3.7.1`, `3.8.0`, `3.8.1`, `3.8.2`, `3.8.3`.
-
-The workflow passes `VIENEU_VERSION` as a Docker build argument and publishes:
-
-```
-ghcr.io/<owner>/vienuetts_server:vieneu-<version>
-ghcr.io/<owner>/vienuetts_server:vieneu-<version>-v<commit-count>
-```
-
-It intentionally does **not** overwrite `:latest`. Example:
-
-```bash
-docker run -d \
-  -p 8001:8001 \
-  -e PORT=8001 \
-  -e API_KEY=vtts_worker_secret_key_123 \
-  -v /path/to/models-3.7.1:/app/data/models \
-  --name vienuetts-worker-3-7-1 \
-  ghcr.io/ngominhtoan/vienuetts_server:vieneu-3.7.1
-```
-
-When running several generations at once, mount a **separate model volume per
-container** so their Hugging Face checkpoints do not share or overwrite each
-other.
-
----
-
-## 4. API Endpoints Specification
-
-### 4.1 Health Check (Open probe, no key required)
-- **Endpoint**: `GET /health` or `GET /internal/v1/health`
-- **Response**:
 ```json
 {
-  "status": "healthy",
-  "service": "vienueTTS_server",
-  "model_loaded": true,
-  "engine_mode": "v3turbo",
-  "precision": "fp32",
-  "device": "cpu",
-  "threads": 8,
-  "active_jobs": 0,
-  "total_voices": 23
-}
-```
-
-### 4.2 List Preset Voices (Requires `X-API-Key`)
-- **Endpoint**: `GET /internal/v1/voices` (or `/v1/voices`)
-- **Headers**: `X-API-Key: <API_KEY>`
-- **Response**:
-```json
-{
-  "total_count": 23,
-  "default_voice": "Minh Đức",
-  "voices": [
-    {
-      "id": "minh_duc",
-      "name": "Minh Đức",
-      "description": "Nam · Bắc · Phong cách tin tức",
-      "gender": "male",
-      "style": "tu_nhien",
-      "sample_rate": 48000
-    },
-    {
-      "id": "quynh_anh",
-      "name": "Quỳnh Anh",
-      "description": "Nữ · Bắc · Phong cách đọc truyện",
-      "gender": "female",
-      "style": "tu_nhien",
-      "sample_rate": 48000
-    }
-  ]
-}
-```
-
-### 4.3 Synthesize Speech (Requires `X-API-Key`)
-- **Endpoint**: `POST /internal/v1/synthesize` (or `/v1/synthesize`)
-- **Headers**:
-  - `X-API-Key: <API_KEY>`
-  - `Content-Type: application/json`
-- **Request Body (Preset Voice)**:
-```json
-{
-  "text": "Xin chào, đây là giọng đọc chuẩn AI VieNeu-TTS 48kHz.",
+  "text": "Xin chào, đây là giọng đọc 48kHz.",
   "voice": "minh_duc",
   "speed": 1.0,
   "pitch": 0,
@@ -162,50 +29,77 @@ other.
   "format": "wav"
 }
 ```
-- **Request Body (Cloned Voice with `.npz` Base64)**:
-```json
-{
-  "text": "Xin chào, đây là giọng đọc nhân bản từ file embedding .npz.",
-  "ref_npz_base64": "<base64_encoded_npz_data>",
-  "speed": 1.0,
-  "format": "wav"
-}
+
+Cloned voices use `ref_npz_base64` (preferred) or `ref_npz_path`. `ref_audio_path` is resolved on the worker's own filesystem only.
+
+Response: binary `audio/wav` with `X-Sample-Rate: 48000` and `X-Execution-Time-Ms`.
+
+Error contract: `400` for invalid input, including a missing `ref_audio_path`; `503` when the engine is not ready or inference fails. Gateways should treat 4xx as input errors and 5xx as worker faults.
+
+## Configuration
+
+Copy `.env.example` to `.env` or pass environment variables:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PORT` | `8001` | HTTP port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `API_KEY` | `""` | Worker key; when set, all protected routes require `X-API-Key` |
+| `VIENEU_MODE` | `v3turbo` | `v3turbo` (48 kHz HQ) or `v3nano` (lightweight) |
+| `VIENEU_PRECISION` | `fp32` | `fp32` or `int8` |
+| `VIENEU_THREADS` | `8` | ONNX Runtime intra-op threads |
+| `VIENEU_MODELS_DIR` | `/app/data/models` | Checkpoint cache directory |
+| `HF_HOME` | `/app/data/models` | Hugging Face cache root |
+| `HF_HUB_OFFLINE` | `0` | `1` forbids downloads; boot fails with 503 if weights are missing |
+| `SKIP_MODEL_PRELOAD` | `0` | `1` skips eager preload at boot |
+| `ALLOW_MOCK_SYNTHESIS` | `0` | `1` enables the 220 Hz mock tone (development only) |
+
+Model directory resolution order: `HF_HOME` → `VIENEU_MODELS_DIR` → `/app/data/models` → `./models` → `./data/models` → Hugging Face cache.
+
+## Model Weights
+
+**Automatic download (default).** On first boot the worker downloads the ONNX graphs and audio tokenizer from Hugging Face. Mount `./models` to persist them:
+
+```bash
+docker run -d \
+  -p 8001:8001 \
+  -e API_KEY=vtts_worker_secret_key_123 \
+  -v /path/to/models:/app/data/models \
+  --name vienuetts-worker \
+  ghcr.io/ngominhtoan/vienuetts_server:latest
 ```
-- **Response**: Binary 48kHz WAV audio (`Content-Type: audio/wav`) with headers `X-Sample-Rate: 48000` and `X-Execution-Time-Ms`.
-- **Error contract**:
-  - `400` — the request itself is invalid, including `ref_audio_path` pointing at a file that does not exist on **this worker's** filesystem (paths are host-local; send `ref_npz_base64` instead).
-  - `503` — the engine is not ready or raised an internal error. Gateways should treat `4xx` as an input error and `5xx` as a worker fault when updating circuit breakers.
 
-### 4.4 Extract Speaker Embedding (Requires `X-API-Key`)
-- **Endpoint**: `POST /internal/v1/embed` (or `/v1/embed`)
-- **Headers**: `X-API-Key: <API_KEY>`
-- **Body**: `multipart/form-data` with `audio_file` (WAV/M4A/MP3, 3 - 15 seconds clip).
-- **Response**: Binary `application/octet-stream` representing NumPy `.npz` file containing `speaker_emb` (192-d) and `codes`.
+**Offline.** Pre-populate the mounted directory and set `HF_HUB_OFFLINE=1`.
 
-### 4.5 Metrics Telemetry (Requires `X-API-Key`)
-- **Endpoint**: `GET /internal/v1/metrics`
-- **Headers**: `X-API-Key: <API_KEY>`
-- **Response**:
-```json
-{
-  "total_requests": 142,
-  "active_jobs": 0,
-  "avg_latency_ms": 3840.5
-}
+**Versioned builds.** The automatic workflow builds the `vieneu` version in `requirements.txt` and publishes `:latest` plus `:v<commit-count>`. The manual workflow `docker-publish-vieneu.yml` accepts one of `3.7.1`, `3.8.0`, `3.8.1`, `3.8.2`, `3.8.3` and publishes `vieneu-<version>` and `vieneu-<version>-v<commit-count>` without overwriting `:latest`.
+
+Each version has its own preset catalog: 3.7.1 ships 23 voices, while 3.8.x ships 25 with renamed entries. Run one model volume per container when mixing generations.
+
+## Running
+
+Root stack:
+
+```bash
+docker compose up -d --build model-service
 ```
 
----
+Standalone (from this directory):
 
-## 5. Testing & Verification
+```bash
+docker build -t vienuetts-worker .
+docker run -p 8001:8001 --env-file .env vienuetts-worker
+```
 
-Run the comprehensive pytest suite:
+## Testing
+
 ```bash
 pytest tests/ -v
 ```
-All 21 test cases verify health probes, voice catalog, synthesis with preset and cloned `.npz`, boundary value constraints, path traversal defense, and speaker embedding extraction.
 
-### Enable Local Git Pre-Push Hook:
-To automatically run tests and block pushing if any test fails:
+The suite covers auth, health, voice catalog and lookup, preset and `.npz` synthesis, boundary values, path traversal, invalid extensions, bad Base64, missing reference paths, and unready-engine responses.
+
+Enable the pre-push hook once:
+
 ```bash
 git config core.hooksPath .githooks
 ```
