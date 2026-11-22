@@ -46,7 +46,8 @@ FROM python:3.12-slim AS runner
 # Exposed as a label so the baked model generation is identifiable even when
 # the deployment pins a digest instead of the vieneu-<version> tag.
 ARG VIENEU_VERSION=""
-LABEL org.opencontainers.image.vieneu.version="${VIENEU_VERSION}"
+LABEL org.opencontainers.image.vieneu.version="${VIENEU_VERSION}" \
+      org.opencontainers.image.variant="cpu"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

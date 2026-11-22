@@ -1,9 +1,7 @@
 name: Manual Build - Selectable VieNeu Version
 
-# Manual-only workflow. The automatic publish workflow (docker-publish.yml)
-# keeps building whatever version requirements.txt declares; this workflow
-# bakes an explicitly selected vieneu version into a separate image tag so
-# multiple model generations can run side by side.
+# Manual-only workflow. Builds either the multi-arch CPU image, the amd64-only
+# CUDA image, or both, for an explicitly selected vieneu version.
 on:
   workflow_dispatch:
     inputs:
@@ -18,13 +16,23 @@ on:
           - "3.8.1"
           - "3.8.2"
           - "3.8.3"
+      image_variant:
+        description: "Image variant to build"
+        required: true
+        type: choice
+        default: "cpu"
+        options:
+          - "cpu"
+          - "gpu"
+          - "both"
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-and-push:
-    name: Build & Push (vieneu-${{ inputs.vieneu_version }})
+  build-cpu:
+    name: Build & Push (cpu, vieneu-${{ inputs.vieneu_version }})
+    if: ${{ inputs.image_variant == 'cpu' || inputs.image_variant == 'both' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -65,16 +73,18 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Docker image
+      - name: Build and push CPU image
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
             VIENEU_VERSION=${{ steps.vars.outputs.version }}
           tags: ${{ steps.vars.outputs.tags }}
           labels: |
+            org.opencontainers.image.variant=cpu
             org.opencontainers.image.version=v${{ steps.vars.outputs.count }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=vieneu-${{ steps.vars.outputs.version }}
@@ -83,12 +93,92 @@ jobs:
       - name: Write job summary
         run: |
           {
-            echo "## Image published"
+            echo "## CPU image published"
             echo ""
             echo "- **vieneu version:** \`${{ steps.vars.outputs.version }}\`"
+            echo "- **Platforms:** \`linux/amd64,linux/arm64\`"
             echo "- **Tags:**"
             echo '```'
             echo "${REGISTRY}/${{ steps.vars.outputs.image }}:vieneu-${{ steps.vars.outputs.version }}"
             echo "${REGISTRY}/${{ steps.vars.outputs.image }}:vieneu-${{ steps.vars.outputs.version }}-v${{ steps.vars.outputs.count }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-gpu:
+    name: Build & Push (cuda, vieneu-${{ inputs.vieneu_version }})
+    if: ${{ inputs.image_variant == 'gpu' || inputs.image_variant == 'both' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calculate image name and tags
+        id: vars
+        run: |
+          IMAGE=$(echo "${{ github.repository_owner }}/vienuetts_server" | tr '[:upper:]' '[:lower:]')
+          COUNT=$(git rev-list --count HEAD)
+          VERSION="${{ inputs.vieneu_version }}"
+          {
+            echo "image=${IMAGE}"
+            echo "count=${COUNT}"
+            echo "version=${VERSION}"
+            echo "tags<<EOF"
+            echo "${REGISTRY}/${IMAGE}:vieneu-${VERSION}-cuda"
+            echo "${REGISTRY}/${IMAGE}:vieneu-${VERSION}-cuda-v${COUNT}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push CUDA image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.gpu
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VIENEU_VERSION=${{ steps.vars.outputs.version }}
+          tags: ${{ steps.vars.outputs.tags }}
+          labels: |
+            org.opencontainers.image.variant=cuda
+            org.opencontainers.image.version=v${{ steps.vars.outputs.count }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=vieneu-${{ steps.vars.outputs.version }}-cuda
+          cache-to: type=gha,mode=max,scope=vieneu-${{ steps.vars.outputs.version }}-cuda
+
+      - name: Write job summary
+        run: |
+          {
+            echo "## CUDA image published"
+            echo ""
+            echo "- **vieneu version:** \`${{ steps.vars.outputs.version }}\`"
+            echo "- **Platforms:** \`linux/amd64\`"
+            echo "- **Tags:**"
+            echo '```'
+            echo "${REGISTRY}/${{ steps.vars.outputs.image }}:vieneu-${{ steps.vars.outputs.version }}-cuda"
+            echo "${REGISTRY}/${{ steps.vars.outputs.image }}:vieneu-${{ steps.vars.outputs.version }}-cuda-v${{ steps.vars.outputs.count }}"
+            echo '```'
+            echo ""
+            echo "Run with NVIDIA Container Toolkit:"
+            echo '```bash'
+            echo "docker run --gpus all -p 8001:8001 \\"
+            echo "  -e API_KEY=<key> \\"
+            echo "  -v /path/to/models:/app/data/models \\"
+            echo "  ${REGISTRY}/${{ steps.vars.outputs.image }}:vieneu-${{ steps.vars.outputs.version }}-cuda"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

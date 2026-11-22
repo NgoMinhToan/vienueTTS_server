@@ -1,0 +1,81 @@
+# CUDA variant: VieNeu-TTS v3 Turbo runs on PyTorch/CUDA.
+# Build for linux/amd64 only; the CPU image remains multi-arch.
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 AS builder
+
+ARG TARGETARCH=amd64
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN test "$TARGETARCH" = "amd64" || (echo "CUDA image supports linux/amd64 only" >&2; exit 1)
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    build-essential \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Optional build-time override for the vieneu package version.
+ARG VIENEU_VERSION=""
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel && \
+    sed -i -E '/^vieneu([<>=!~].*)?$/d' requirements.txt && \
+    pip install --no-compile -r requirements.txt && \
+    if [ -n "${VIENEU_VERSION}" ]; then \
+        echo "Overriding vieneu version: ${VIENEU_VERSION}"; \
+        pip install --no-compile "vieneu[cuda]==${VIENEU_VERSION}"; \
+    else \
+        echo "Using latest vieneu[cuda]"; \
+        pip install --no-compile "vieneu[cuda]"; \
+    fi && \
+    python -c "import torch; print('Installed torch', torch.__version__, 'CUDA', torch.version.cuda); assert torch.version.cuda" && \
+    python -c "from importlib.metadata import version; print('Installed vieneu', version('vieneu'))" && \
+    pip uninstall -y gradio gradio_client altair matplotlib ffmpy 2>/dev/null || true && \
+    find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+# Stage 2: runtime image without build tools.
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 AS runner
+
+ARG VIENEU_VERSION=""
+LABEL org.opencontainers.image.vieneu.version="${VIENEU_VERSION}" \
+      org.opencontainers.image.variant="cuda" \
+      org.opencontainers.image.cuda.version="12.8.1"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    HF_HUB_DISABLE_SYMLINKS=1 \
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    VIENEU_DEVICE=auto \
+    VIENEU_MAX_CONCURRENCY=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    curl \
+    libsndfile1 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+COPY . /app/vienueTTS_server/
+WORKDIR /app/vienueTTS_server
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8001/internal/v1/health || exit 1
+
+CMD ["python", "main.py"]

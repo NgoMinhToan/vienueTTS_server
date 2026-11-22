@@ -37,6 +37,8 @@ jobs:
         run: |
           pytest tests/ -v
 
+  # CPU-only on purpose: unsuffixed tags stay CPU. CUDA images are built by
+  # the manual docker-publish-vieneu.yml workflow with image_variant=gpu.
   build-and-push:
     name: Build and Publish Docker Image to GHCR
     needs: test

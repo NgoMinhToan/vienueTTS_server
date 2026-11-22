@@ -61,6 +61,12 @@ class HealthResponse(BaseModel):
     engine_mode: str = "v3turbo"
     precision: str = "fp32"
     device: str = "cpu"
+    device_requested: str = "auto"
+    runtime: str = "onnx"
+    dtype: str = "auto"
+    sample_rate: int = 48000
+    device_error: Optional[str] = None
+    max_concurrency: int = 0
     threads: int = 8
     active_jobs: int = 0
     total_voices: int = 23
