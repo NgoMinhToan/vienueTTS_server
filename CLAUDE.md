@@ -6,7 +6,8 @@ Guidance for AI agents working in the inference worker repository.
 
 - `main.py` — FastAPI app, lifespan preload, PNA middleware, mounts the router at `/internal/v1` and `/v1`.
 - `api/inference.py` — synthesis, embedding extraction, voice catalog, health, metrics.
-- `core/engine.py` — model path resolution, ONNX inference, voice catalog, 48 kHz WAV encoding.
+- `core/engine.py` — model path resolution, ONNX inference on CPU / PyTorch inference on CUDA, voice catalog, 48 kHz WAV encoding.
+- `core/runtime.py` — `VIENEU_DEVICE` resolution, CPU/CUDA env parsing, engine kwargs.
 - `core/security.py` — `X-API-Key` verification against `API_KEY`.
 - `models/schemas.py` — request/response contracts and validation bounds.
 - `tests/` — auth, boundary, and security suite.
@@ -17,14 +18,17 @@ Guidance for AI agents working in the inference worker repository.
 pytest tests/ -v
 pytest tests/test_inference_auth.py -v
 pytest tests/test_boundary_and_exceptions.py -v
-docker build -t vienuetts-worker .
+pytest tests/test_runtime_config.py -v
+docker build -t vienuetts-worker:cpu .
+docker build -f Dockerfile.gpu -t vienuetts-worker:cuda .
 ```
 
 On Windows, run tests with the repository virtual environment if `python` is not on PATH: `..\.venv\Scripts\python.exe -m pytest tests/ -v`.
 
 ## Invariants
 
-- Output is always 48 kHz WAV unless `format=pcm` is requested; include `X-Sample-Rate`.
+- Output is always 48 kHz WAV unless `format=pcm` is requested; include `X-Sample-Rate`. The engine is always v3 Turbo; do not reintroduce a model-mode env var.
+- Unsuffixed image tags are CPU; CUDA images use the `-cuda` suffix and are `linux/amd64` only.
 - The service is stateless. No database, user accounts, or persisted jobs.
 - Preset and cloned voices share the same endpoint. Cloned voices use `ref_npz_base64` (preferred), `ref_npz_path`, or worker-local `ref_audio_path`.
 - A missing `ref_audio_path` is a 400 input error. Engine failures are 503.

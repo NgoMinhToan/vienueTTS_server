@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import soundfile as sf
+import soxr
+
+from .runtime import (
+    DeviceConfigurationError,
+    build_engine_kwargs,
+    parse_int_env,
+    parse_precision_env,
+    resolve_device,
+)
 
 logger = logging.getLogger("vienueTTS_server.engine")
 
@@ -70,13 +79,49 @@ def wav_from_float32(audio: np.ndarray, sample_rate: int = 48000) -> bytes:
 class ModelEngineService:
     def __init__(self):
         self._engine = None
-        self.engine_mode = os.getenv("VIENEU_MODE", "v3turbo")
-        self.precision = os.getenv("VIENEU_PRECISION", "fp32")
-        self.threads = int(os.getenv("VIENEU_THREADS", "8"))
+        # The worker always runs v3 Turbo. VIENEU_MODE is intentionally gone;
+        # old deployments that still set it only get a warning (see below).
+        self.engine_mode = "v3turbo"
+        self.precision = parse_precision_env()
+        self.threads = parse_int_env("VIENEU_THREADS", 8)
+        self.max_concurrency = parse_int_env("VIENEU_MAX_CONCURRENCY", 0)
+        self.device_requested = (os.getenv("VIENEU_DEVICE", "auto") or "auto").strip().lower()
+        self.device = "cpu"
+        self.runtime = "onnx"
+        self.dtype = "auto"
+        self.device_error: Optional[str] = None
         self._slug_to_name: Dict[str, str] = {}
         self._voices_cache: List[Dict[str, Any]] = []
         self._init_env_paths()
+        self._resolve_runtime()
+        if os.getenv("VIENEU_MODE"):
+            logger.warning(
+                "VIENEU_MODE is deprecated and ignored; v3turbo is always used."
+            )
         self._init_voice_catalog()
+
+    def _resolve_runtime(self):
+        """Resolve VIENEU_DEVICE without crashing process import.
+
+        An explicit cuda/cuda:N request that cannot be honoured is stored in
+        ``device_error`` and surfaced by main.lifespan (fail-fast) and health.
+        ``auto`` always falls back to CPU.
+        """
+        try:
+            self.device = resolve_device(self.device_requested)
+            self.runtime = "pytorch" if self.device.startswith("cuda") else "onnx"
+            self.device_error = None
+            visible = os.getenv("NVIDIA_VISIBLE_DEVICES", "").strip().lower()
+            if self.device == "cpu" and self.device_requested == "auto" and visible not in ("", "void"):
+                logger.warning(
+                    "A GPU is visible, but CUDA is not usable in this image/runtime; "
+                    "running on CPU. Use the -cuda image and check the NVIDIA driver/toolkit."
+                )
+        except DeviceConfigurationError as exc:
+            self.device = "cpu"
+            self.runtime = "onnx"
+            self.device_error = str(exc)
+            logger.error("Runtime configuration error: %s", exc)
 
     def _init_env_paths(self):
         # 1. Models directory & HF_HOME synchronization
@@ -234,6 +279,9 @@ class ModelEngineService:
     def _load_engine(self):
         if self._engine is not None:
             return self._engine
+        if self.device_error:
+            logger.error("Cannot load engine: %s", self.device_error)
+            return None
         try:
             self._init_env_paths()
             hf_home = os.getenv("HF_HOME", "default")
@@ -241,23 +289,41 @@ class ModelEngineService:
             models_dir = Path(hf_home) if hf_home != "default" else Path("/app/data/models")
             self._dereference_model_symlinks(models_dir)
 
-            logger.info(f"⏳ [MODEL ENGINE] Initializing core Vieneu inference engine... (HF_HOME='{hf_home}', HF_HUB_OFFLINE={hf_offline})")
+            logger.info(
+                f"⏳ [MODEL ENGINE] Initializing core Vieneu inference engine... "
+                f"(device={self.device}, runtime={self.runtime}, "
+                f"HF_HOME='{hf_home}', HF_HUB_OFFLINE={hf_offline})"
+            )
             from vieneu import Vieneu
+
+            engine_kwargs = build_engine_kwargs(self.device, self.precision, self.threads)
             t0 = time.perf_counter()
             try:
-                self._engine = Vieneu()
+                self._engine = Vieneu(**engine_kwargs)
             except Exception as load_err:
                 err_str = str(load_err)
                 if "External data path" in err_str or "escapes model directory" in err_str:
                     logger.warning(f"⚠️ [ONNX SYMLINK DETECTED] {load_err}. Dereferencing cache symlinks and retrying...")
                     self._dereference_model_symlinks(models_dir)
-                    self._engine = Vieneu()
+                    self._engine = Vieneu(**engine_kwargs)
                 else:
                     raise load_err
 
             elapsed = time.perf_counter() - t0
+            actual_backend = getattr(self._engine, "backend", None)
+            if actual_backend:
+                self.runtime = actual_backend
+                if actual_backend == "onnx" and self.device != "cpu":
+                    logger.warning(
+                        f"Engine fell back to ONNX CPU despite device={self.device}; "
+                        "health will report the actual CPU runtime."
+                    )
+                    self.device = "cpu"
             voice_count = len(self._engine._preset_voices) if hasattr(self._engine, "_preset_voices") else len(self._voices_cache)
-            logger.info(f"✅ [MODEL ENGINE] Vieneu inference engine loaded successfully with {voice_count} voices in {elapsed:.2f}s.")
+            logger.info(
+                f"✅ [MODEL ENGINE] Vieneu inference engine loaded successfully with "
+                f"{voice_count} voices in {elapsed:.2f}s (device={self.device}, runtime={self.runtime})."
+            )
             # Update slug map with real loaded engine voices
             if hasattr(self._engine, "_preset_voices"):
                 for name in self._engine._preset_voices.keys():
@@ -343,9 +409,28 @@ class ModelEngineService:
                 emotion=emotion_level,
                 ref_audio=ref_audio_path,
             )
+            engine_sr = SAMPLE_RATE
             if isinstance(audio, tuple):
-                audio = audio[0]
-            audio_arr = audio.astype(np.float32)
+                raw_audio = audio[0]
+                if len(audio) > 1:
+                    try:
+                        engine_sr = int(audio[1])
+                    except (TypeError, ValueError):
+                        engine_sr = SAMPLE_RATE
+            else:
+                raw_audio = audio
+
+            audio_arr = np.asarray(raw_audio, dtype=np.float32)
+            if audio_arr.size and engine_sr > 0 and engine_sr != SAMPLE_RATE:
+                logger.warning(
+                    f"Engine returned {engine_sr}Hz; resampling to {SAMPLE_RATE}Hz to keep the 48kHz contract."
+                )
+                audio_arr = np.asarray(
+                    soxr.resample(audio_arr, engine_sr, SAMPLE_RATE), dtype=np.float32
+                )
+            elif engine_sr <= 0:
+                logger.warning(f"Engine returned invalid sample rate {engine_sr}; assuming {SAMPLE_RATE}Hz.")
+
             elapsed = time.perf_counter() - t0
             audio_dur = len(audio_arr) / SAMPLE_RATE if len(audio_arr) else 0.0
             rtf = elapsed / audio_dur if audio_dur > 0 else 0.0

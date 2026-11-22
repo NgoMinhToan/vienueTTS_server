@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -31,6 +32,22 @@ logger = logging.getLogger("vienueTTS_server.inference")
 router = APIRouter(tags=["Inference"])
 
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".mp3", ".ogg", ".flac"}
+
+# 0 keeps the historic unlimited behavior. The CUDA image sets 1 by default so
+# concurrent requests cannot exhaust VRAM.
+MAX_CONCURRENT_INFERENCE = engine_service.max_concurrency
+_inference_semaphore = (
+    threading.BoundedSemaphore(MAX_CONCURRENT_INFERENCE)
+    if MAX_CONCURRENT_INFERENCE > 0
+    else None
+)
+
+
+def _run_with_concurrency_limit(fn):
+    if _inference_semaphore is None:
+        return fn()
+    with _inference_semaphore:
+        return fn()
 
 
 def validate_file_path(file_path: Optional[str]) -> Optional[str]:
@@ -112,7 +129,13 @@ async def health_check():
         model_loaded=is_loaded,
         engine_mode=engine_service.engine_mode,
         precision=engine_service.precision,
-        device="cpu",
+        device=engine_service.device,
+        device_requested=engine_service.device_requested,
+        runtime=engine_service.runtime,
+        dtype=engine_service.dtype,
+        sample_rate=SAMPLE_RATE,
+        device_error=engine_service.device_error,
+        max_concurrency=MAX_CONCURRENT_INFERENCE,
         threads=engine_service.threads,
         active_jobs=active,
         total_voices=engine_service.get_voice_count(),
@@ -184,17 +207,19 @@ async def synthesize(request: SynthesizeRequest):
         loop = asyncio.get_running_loop()
         audio, sample_rate = await loop.run_in_executor(
             None,
-            lambda: engine_service.synthesize(
-                text=request.text,
-                voice_id=request.voice_id or request.voice or "minh_duc",
-                speed=request.speed,
-                pitch=request.pitch,
-                emotion_level=request.emotion_level or request.emotion or 0,
-                denoise=request.denoise,
-                smart_pause=request.smart_pause,
-                ref_audio_path=validated_ref_path,
-                ref_npz_path=validated_npz_path,
-                ref_npz_bytes=ref_npz_bytes,
+            lambda: _run_with_concurrency_limit(
+                lambda: engine_service.synthesize(
+                    text=request.text,
+                    voice_id=request.voice_id or request.voice or "minh_duc",
+                    speed=request.speed,
+                    pitch=request.pitch,
+                    emotion_level=request.emotion_level or request.emotion or 0,
+                    denoise=request.denoise,
+                    smart_pause=request.smart_pause,
+                    ref_audio_path=validated_ref_path,
+                    ref_npz_path=validated_npz_path,
+                    ref_npz_bytes=ref_npz_bytes,
+                )
             ),
         )
 
@@ -264,7 +289,9 @@ async def extract_speaker_embedding(audio_file: UploadFile = File(...)):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
-            lambda: engine_service.precompute_voice_embeddings(str(temp_in), temp_out),
+            lambda: _run_with_concurrency_limit(
+                lambda: engine_service.precompute_voice_embeddings(str(temp_in), temp_out)
+            ),
         )
 
         if temp_out.exists() and temp_out.stat().st_size > 0:

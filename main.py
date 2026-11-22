@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from vienueTTS_server.api.inference import router as inference_router
-from vienueTTS_server.core.engine import engine_service
+from vienueTTS_server.core.engine import SAMPLE_RATE, engine_service
 
 logger = logging.getLogger("vienueTTS_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -58,17 +58,29 @@ async def lifespan(app: FastAPI):
 
     print("\n" + "=" * 68)
     print(" [VIENEU TTS WORKER] STATELESS 48kHz AI INFERENCE SERVICE")
-    print(f" * Engine Mode:          {engine_service.engine_mode}")
-    print(f" * Precision:            {engine_service.precision}")
+    print(f" * Engine Mode:          {engine_service.engine_mode} (fixed)")
+    print(f" * Device:               {engine_service.device} (requested: {engine_service.device_requested})")
+    print(f" * Runtime:              {engine_service.runtime}")
+    print(f" * Precision (CPU only): {engine_service.precision}")
     print(f" * Audio Standard:       48,000 Hz (48kHz WAV Studio Standard)")
-    print(f" * Intra-op Threads:     {engine_service.threads}")
+    print(f" * Threads (CPU only):   {engine_service.threads}")
+    print(f" * Max Concurrency:      {engine_service.max_concurrency}")
     print(f" * Available Voices:     {voice_count} preset voices")
     print(f" * Worker HTTP Endpoint: http://0.0.0.0:{port}")
     print(f" * API Key Protected:    {has_key}")
     print("=" * 68 + "\n")
 
+    if engine_service.device_error:
+        raise RuntimeError(
+            f"Invalid runtime configuration: {engine_service.device_error}"
+        )
+
     logger.info(f"Starting vienueTTS_server on port {port} (API_KEY protected: {has_key})...")
-    logger.info(f"Engine mode: {engine_service.engine_mode}, Threads: {engine_service.threads}, Voices: {voice_count}")
+    logger.info(
+        f"Engine mode: {engine_service.engine_mode}, device: {engine_service.device} "
+        f"(requested: {engine_service.device_requested}), runtime: {engine_service.runtime}, "
+        f"threads: {engine_service.threads}, voices: {voice_count}"
+    )
 
     # Eager loading: Preload AI model on startup immediately
     skip_preload = os.getenv("SKIP_MODEL_PRELOAD", "").strip().lower() in ("1", "true", "yes")
@@ -115,6 +127,14 @@ async def root_health():
     return {
         "status": "healthy",
         "service": "vienueTTS_server",
+        "model_loaded": engine_service.is_ready(),
+        "engine_mode": engine_service.engine_mode,
+        "device": engine_service.device,
+        "device_requested": engine_service.device_requested,
+        "runtime": engine_service.runtime,
+        "sample_rate": SAMPLE_RATE,
+        "device_error": engine_service.device_error,
+        "max_concurrency": engine_service.max_concurrency,
         "total_voices": engine_service.get_voice_count(),
     }
 

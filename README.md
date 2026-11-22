@@ -1,6 +1,6 @@
 # vienueTTS_server
 
-Stateless AI inference worker for the Voice Cloner platform. It runs VieNeu-TTS v3 Turbo/Nano through ONNX Runtime and returns **48 kHz WAV** audio for Vietnamese and English text.
+Stateless AI inference worker for the Voice Cloner platform. It runs VieNeu-TTS v3 Turbo through ONNX Runtime on CPU (PyTorch/CUDA in the `-cuda` image) and returns **48 kHz WAV** audio for Vietnamese and English text.
 
 ## Endpoints
 
@@ -45,9 +45,10 @@ Copy `.env.example` to `.env` or pass environment variables:
 | `PORT` | `8001` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `API_KEY` | `""` | Worker key; when set, all protected routes require `X-API-Key` |
-| `VIENEU_MODE` | `v3turbo` | `v3turbo` (48 kHz HQ) or `v3nano` (lightweight) |
-| `VIENEU_PRECISION` | `fp32` | `fp32` or `int8` |
-| `VIENEU_THREADS` | `8` | ONNX Runtime intra-op threads |
+| `VIENEU_DEVICE` | `auto` | `auto`, `cpu`, `cuda`, `cuda:N`. `auto` uses CUDA only when the image has CUDA torch and a GPU is available; explicit `cuda` fails boot if unavailable |
+| `VIENEU_PRECISION` | `fp32` | CPU/ONNX only: `fp32` or `int8`; ignored on CUDA |
+| `VIENEU_THREADS` | `8` | CPU/ONNX only: ONNX Runtime intra-op threads; ignored on CUDA |
+| `VIENEU_MAX_CONCURRENCY` | `0` | `0` = unlimited; the CUDA image defaults to `1` |
 | `VIENEU_MODELS_DIR` | `/app/data/models` | Checkpoint cache directory |
 | `HF_HOME` | `/app/data/models` | Hugging Face cache root |
 | `HF_HUB_OFFLINE` | `0` | `1` forbids downloads; boot fails with 503 if weights are missing |
@@ -58,7 +59,7 @@ Model directory resolution order: `HF_HOME` → `VIENEU_MODELS_DIR` → `/app/da
 
 ## Model Weights
 
-**Automatic download (default).** On first boot the worker downloads the ONNX graphs and audio tokenizer from Hugging Face. Mount `./models` to persist them:
+**Automatic download (default).** On first boot the worker downloads its runtime artifacts from Hugging Face (ONNX graphs on CPU, PyTorch weights on CUDA) plus the audio tokenizer. Mount `./models` to persist them:
 
 ```bash
 docker run -d \
@@ -69,9 +70,16 @@ docker run -d \
   ghcr.io/ngominhtoan/vienuetts_server:latest
 ```
 
-**Offline.** Pre-populate the mounted directory and set `HF_HUB_OFFLINE=1`.
+**Offline.** Pre-populate the mounted directory and set `HF_HUB_OFFLINE=1`. CPU and CUDA warm different artifacts: CPU caches the ONNX graphs, while CUDA caches the PyTorch `model.safetensors` and MOSS tokenizer. Warm each variant with its own volume, or warm one shared volume with both variants, before going offline.
 
-**Versioned builds.** The automatic workflow builds the `vieneu` version in `requirements.txt` and publishes `:latest` plus `:v<commit-count>`. The manual workflow `docker-publish-vieneu.yml` accepts one of `3.7.1`, `3.8.0`, `3.8.1`, `3.8.2`, `3.8.3` and publishes `vieneu-<version>` and `vieneu-<version>-v<commit-count>` without overwriting `:latest`.
+**Versioned builds.** The automatic workflow builds the `vieneu` version in `requirements.txt` and publishes CPU `:latest` plus `:v<commit-count>`. The manual workflow `docker-publish-vieneu.yml` accepts one of `3.7.1`, `3.8.0`, `3.8.1`, `3.8.2`, `3.8.3`, plus an `image_variant` choice of `cpu`, `gpu`, or `both`.
+
+| Variant | Dockerfile | Platforms | Tags |
+| :--- | :--- | :--- | :--- |
+| CPU | `Dockerfile` | `linux/amd64,linux/arm64` | `vieneu-<version>`, `vieneu-<version>-v<count>` |
+| CUDA | `Dockerfile.gpu` | `linux/amd64` | `vieneu-<version>-cuda`, `vieneu-<version>-cuda-v<count>` |
+
+Unsuffixed tags always mean CPU, so existing deployments keep working. The CUDA image is amd64-only and requires an NVIDIA driver compatible with CUDA 12.8 plus `nvidia-container-toolkit`.
 
 Each version has its own preset catalog: 3.7.1 ships 23 voices, while 3.8.x ships 25 with renamed entries. Run one model volume per container when mixing generations.
 
@@ -83,12 +91,25 @@ Root stack:
 docker compose up -d --build model-service
 ```
 
-Standalone (from this directory):
+Standalone CPU image (from this directory):
 
 ```bash
-docker build -t vienuetts-worker .
-docker run -p 8001:8001 --env-file .env vienuetts-worker
+docker build -t vienuetts-worker:cpu .
+docker run -p 8001:8001 --env-file .env vienuetts-worker:cpu
 ```
+
+Standalone CUDA image (linux/amd64 host with NVIDIA driver + `nvidia-container-toolkit`):
+
+```bash
+docker build -f Dockerfile.gpu -t vienuetts-worker:cuda .
+docker run --gpus all -p 8001:8001 --env-file .env \
+  -e VIENEU_MAX_CONCURRENCY=1 \
+  vienuetts-worker:cuda
+```
+
+An env file copied from `.env.example` sets `VIENEU_MAX_CONCURRENCY=0`, which overrides the CUDA image's built-in `1`; the explicit `-e` above keeps GPU inference serialized.
+
+A GPU mounted into the CPU image is ignored: that image has no CUDA torch. Use the `-cuda` image or the image built from `Dockerfile.gpu` for GPU inference. Apple Silicon MPS, Intel XPU/iGPU, and AMD ROCm are not supported by this worker; the `linux/arm64` image runs on CPU.
 
 ## Testing
 
@@ -96,7 +117,7 @@ docker run -p 8001:8001 --env-file .env vienuetts-worker
 pytest tests/ -v
 ```
 
-The suite covers auth, health, voice catalog and lookup, preset and `.npz` synthesis, boundary values, path traversal, invalid extensions, bad Base64, missing reference paths, and unready-engine responses.
+The suite covers auth, health, voice catalog and lookup, preset and `.npz` synthesis, boundary values, path traversal, invalid extensions, bad Base64, missing reference paths, device resolution, 48 kHz normalization, and unready-engine responses.
 
 Enable the pre-push hook once:
 

@@ -19,6 +19,45 @@ def test_health_check_open_without_api_key():
     assert data["status"] == "healthy"
     assert "total_voices" in data
     assert data["total_voices"] >= 23
+    assert data["engine_mode"] == "v3turbo"
+    assert data["sample_rate"] == 48000
+    assert data["device"] in {"cpu", "cuda", "cuda:0"}
+    assert data["device_requested"] in {"auto", "cpu", "cuda"} or data["device_requested"].startswith("cuda:")
+    assert data["runtime"] in {"onnx", "pytorch"}
+    if data["device_requested"] in {"auto", "cpu"}:
+        assert data["device_error"] is None
+
+
+def test_health_reports_resolved_cuda_device(monkeypatch):
+    from vienueTTS_server.core import engine
+
+    monkeypatch.setattr(engine.engine_service, "device", "cuda:0")
+    monkeypatch.setattr(engine.engine_service, "device_requested", "cuda:0")
+    monkeypatch.setattr(engine.engine_service, "runtime", "pytorch")
+
+    res = client.get("/internal/v1/health")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["device"] == "cuda:0"
+    assert data["device_requested"] == "cuda:0"
+    assert data["runtime"] == "pytorch"
+    assert data["sample_rate"] == 48000
+
+
+def test_synthesize_resamples_engine_output_to_48khz(monkeypatch):
+    from vienueTTS_server.core import engine
+
+    class FakeEngine:
+        def infer(self, **kwargs):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    monkeypatch.setattr(engine.engine_service, "_load_engine", lambda: FakeEngine())
+    monkeypatch.setattr(engine.engine_service, "device_error", None)
+
+    audio, sample_rate = engine.engine_service.synthesize(text="Xin chào")
+
+    assert sample_rate == 48000
+    assert len(audio) == 48000
 
 
 def test_root_health_open():

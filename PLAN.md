@@ -10,7 +10,8 @@ Open work only. Git history and `CONTEXT.md` record what is already implemented.
 ## Backlog (candidates, not committed)
 
 - Add a version-matrix check that verifies voice-catalog parity for each published image.
-- Benchmark `v3turbo` vs `v3nano` on CPU and document expected latency and memory.
+- Benchmark v3 Turbo RTF and memory on CPU vs CUDA; publish expected numbers per image variant.
+- Validate the CUDA image on amd64 with `--gpus all`, including an offline weight cache warmed by the same variant.
 - Harden embedding extraction failure reporting with structured error details.
 - Evaluate streaming or chunked synthesis for long paragraphs (the current API is non-streaming).
 - Add readiness/latency metrics suitable for gateway circuit-breaker decisions.
@@ -19,7 +20,8 @@ Open work only. Git history and `CONTEXT.md` record what is already implemented.
 
 ```bash
 pytest tests/ -v
-docker build -t vienuetts-worker .
+docker build -t vienuetts-worker:cpu .
+docker build -f Dockerfile.gpu -t vienuetts-worker:cuda .
 ```
 
 When changing the pinned `vieneu` version, verify the catalog size, renamed voices, and a full synthesize/embed round trip.
